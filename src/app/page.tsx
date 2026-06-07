@@ -5,6 +5,7 @@ import { SessionItem } from '@/components/SessionItem';
 import { UsageChartCard } from '@/components/UsageChartCard';
 import { CategoryBadge } from '@/components/CategoryBadge';
 import { RangePicker } from '@/components/RangePicker';
+import { LiveQuotaCard } from '@/components/LiveQuotaCard';
 import {
   getOverview,
   getRangeSummary,
@@ -96,6 +97,8 @@ export default async function DashboardPage({
             hint={showDelta ? costDelta.text : 'retail token prices'}
           />
         </div>
+
+        <LiveQuotaCard />
 
         <UsageChartCard data={daily} label={fullLabel} />
 
