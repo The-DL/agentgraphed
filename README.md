@@ -32,6 +32,17 @@ That's it. The dashboard opens at `http://localhost:3737`. Re-run any time to re
 
 > Requires Node 20+. First launch scans `~/.claude/projects/` and `~/.codex/sessions/` — sessions appear immediately, no configuration.
 
+## Using AgentGraphed
+
+After `npx agentgraphed`, the dashboard opens automatically. From there:
+
+- **Browse your work** — Timeline groups every session by day. Click any session to read the full conversation in a chat-bubble view.
+- **Resume a session** — On any session page, click *Resume session* to copy `cd <cwd> && claude --resume <id>` to your clipboard. Paste it in your terminal to pick up where you left off in Claude Code.
+- **Find a specific project** — Projects ranks every git repo by activity. Click one to see only that repo's sessions.
+- **Refresh after more coding** — Re-run `npx agentgraphed`. It re-scans your CLI logs and indexes anything new in seconds; already-ingested sessions are skipped.
+- **Get clean titles and categories** *(optional)* — Open *Settings → LLM provider*, paste an Anthropic or OpenAI key, then click *Classify uncategorized*. Past-tense titles like "Fixed Stripe checkout bug" replace the raw first prompt.
+- **Stop** — Hit `Ctrl+C` in the terminal that's running it. Your data stays in `~/.agentgraphed/` for next time.
+
 ## Features
 
 - **Dashboard** — 30-day usage chart, KPIs, top projects, work categories at a glance
