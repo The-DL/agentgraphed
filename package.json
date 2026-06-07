@@ -1,6 +1,6 @@
 {
   "name": "agentgraphed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Local-first analytics dashboard for Claude Code & Codex CLI sessions. See what you built.",
   "keywords": [
