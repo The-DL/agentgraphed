@@ -5,8 +5,9 @@ import { SessionItem } from '@/components/SessionItem';
 import { UsageChartCard } from '@/components/UsageChartCard';
 import { CategoryBadge } from '@/components/CategoryBadge';
 import { RangePicker } from '@/components/RangePicker';
-import { LiveQuotaCard } from '@/components/LiveQuotaCard';
+import { QuotaKpiCard } from '@/components/QuotaKpiCard';
 import { FreshnessIndicator } from '@/components/FreshnessIndicator';
+import { getClaudeQuotaKpi, getCodexQuotaKpi } from '@/lib/quota/cached';
 import {
   getOverview,
   getRangeSummary,
@@ -54,6 +55,14 @@ export default async function DashboardPage({
   const todaySessions = getTodaySessions();
   const recent = getRecentSessions(8);
   const daySummary = getDaySummary(dayKey(Date.now()));
+
+  // Fetch both live-quota KPIs in parallel. Each is cached for 60s, so on a
+  // warm cache these are SQLite reads (sub-millisecond). On a cold cache,
+  // they probe Anthropic / OpenAI synchronously — typical total ~500ms.
+  const [claudeQuota, codexQuota] = await Promise.all([
+    getClaudeQuotaKpi(),
+    getCodexQuotaKpi(),
+  ]);
 
   const empty = overview.sessions === 0;
 
@@ -106,7 +115,10 @@ export default async function DashboardPage({
           />
         </div>
 
-        <LiveQuotaCard />
+        <div className="grid grid-cols-2 gap-4">
+          <QuotaKpiCard kpi={claudeQuota} />
+          <QuotaKpiCard kpi={codexQuota} />
+        </div>
 
         <UsageChartCard data={daily} label={fullLabel} />
 
