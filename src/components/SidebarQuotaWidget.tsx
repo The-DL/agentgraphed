@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 // Sidebar live-quota widget.
 //
@@ -70,7 +71,25 @@ function headlineLabel(state: State): string {
 export function SidebarQuotaWidget() {
   const [state, setState] = useState<State>({ claude: null, codex: null, fetchedAt: 0, loading: false });
   const [open, setOpen] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Recompute popover position whenever it opens (and on scroll/resize while
+  // open). Portaled to <body>, so we must position by absolute pixel coords.
+  useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const update = () => {
+      if (triggerRef.current) setAnchorRect(triggerRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open]);
 
   const fetchBoth = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
@@ -103,6 +122,7 @@ export function SidebarQuotaWidget() {
 
   return (
     <div
+      ref={triggerRef}
       className="relative px-3 py-2 border-b border-surface-2"
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
@@ -122,24 +142,51 @@ export function SidebarQuotaWidget() {
         </span>
       </button>
 
-      {open && (
-        <Popover state={state} loading={state.loading} />
+      {open && anchorRect && typeof document !== 'undefined' && createPortal(
+        <Popover
+          state={state}
+          loading={state.loading}
+          anchorRect={anchorRect}
+          onEnter={onEnter}
+          onLeave={onLeave}
+        />,
+        document.body,
       )}
     </div>
   );
 }
 
-function Popover({ state, loading }: { state: State; loading: boolean }) {
+function Popover({
+  state,
+  loading,
+  anchorRect,
+  onEnter,
+  onLeave,
+}: {
+  state: State;
+  loading: boolean;
+  anchorRect: DOMRect;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  // Position to the right of the trigger with an 8px gap; align tops.
+  const popoverStyle: React.CSSProperties = {
+    position: 'fixed',
+    left: anchorRect.right + 8,
+    top: anchorRect.top,
+    backgroundColor: '#1c2026',
+    isolation: 'isolate', // create our own stacking context, opaque to filters
+  };
   return (
     <div
       role="dialog"
-      // Force a fully opaque elevated surface. The dashboard's recharts SVG
-      // sits at a higher visual stack than the sidebar, so without an
-      // explicit background + strong shadow the chart bleeds through.
-      // Using surface-2 (#1c2026) + visible border + deep shadow + a small
-      // backdrop blur to soften anything else lurking behind.
-      className="absolute left-full top-0 ml-2 w-72 z-50 rounded-lg border border-surface-3 p-4 space-y-4 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)] backdrop-blur-sm"
-      style={{ backgroundColor: '#1c2026' }}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      // Portaled to <body> so the recharts SVG filter (which lives in its own
+      // stacking context) can never paint above us. Opaque background pinned
+      // inline; `isolation: isolate` keeps any descendant compositing local.
+      className="w-72 z-[9999] rounded-lg border border-surface-3 p-4 space-y-4 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]"
+      style={popoverStyle}
     >
       {loading && state.fetchedAt === 0 ? (
         <div className="text-body-sm text-ink-mute">Probing Anthropic & OpenAI…</div>
