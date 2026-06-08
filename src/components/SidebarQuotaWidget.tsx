@@ -49,7 +49,7 @@ function dotColor(state: State): string {
 
 function fmtRelative(ts: number): string {
   const ms = ts - Date.now();
-  if (ms <= 0) return 'now';
+  if (ms <= 0) return 'resetting';
   const totalMin = Math.round(ms / 60_000);
   if (totalMin < 1) return '<1m';
   if (totalMin < 60) return `${totalMin}m`;
@@ -133,7 +133,13 @@ function Popover({ state, loading }: { state: State; loading: boolean }) {
   return (
     <div
       role="dialog"
-      className="absolute left-full top-0 ml-2 w-72 z-50 card p-4 space-y-4 shadow-2xl"
+      // Force a fully opaque elevated surface. The dashboard's recharts SVG
+      // sits at a higher visual stack than the sidebar, so without an
+      // explicit background + strong shadow the chart bleeds through.
+      // Using surface-2 (#1c2026) + visible border + deep shadow + a small
+      // backdrop blur to soften anything else lurking behind.
+      className="absolute left-full top-0 ml-2 w-72 z-50 rounded-lg border border-surface-3 p-4 space-y-4 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)] backdrop-blur-sm"
+      style={{ backgroundColor: '#1c2026' }}
     >
       {loading && state.fetchedAt === 0 ? (
         <div className="text-body-sm text-ink-mute">Probing Anthropic & OpenAI…</div>
@@ -143,7 +149,9 @@ function Popover({ state, loading }: { state: State; loading: boolean }) {
           <div className="border-t border-surface-2" />
           <ProviderBlock kpi={state.codex} />
           <div className="text-[10px] text-ink-mute font-mono tabular pt-1 border-t border-surface-2">
-            {state.fetchedAt === 0 ? 'never probed' : `updated ${fmtSince(state.fetchedAt)} ago · hover refreshes after 60s`}
+            {state.fetchedAt === 0
+              ? 'never probed'
+              : `updated ${fmtSince(state.fetchedAt)} · hover again after 60s to refresh`}
           </div>
         </>
       )}
@@ -239,6 +247,6 @@ function parseProbeResponse(provider: 'claude' | 'codex', body: ProbeResponseSha
 function fmtSince(ts: number): string {
   const ms = Date.now() - ts;
   if (ms < 1000) return 'just now';
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-  return `${Math.round(ms / 60_000)}m`;
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+  return `${Math.round(ms / 60_000)}m ago`;
 }
