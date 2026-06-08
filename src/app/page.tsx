@@ -15,8 +15,10 @@ import {
   getTodaySessions,
   getRecentSessions,
   getDaySummary,
+  getSetting,
 } from '@/lib/queries';
 import { triggerBackgroundIngest, lastIngestedAt } from '@/lib/ingest/auto';
+import type { LlmProvider } from '@/lib/llm/models';
 import { fmtCost, fmtTokens, dayKey, fmtDay } from '@/lib/format';
 import { parseRange, rangeDays, rangeLabel, rangeShortLabel } from '@/lib/range';
 
@@ -53,6 +55,16 @@ export default async function DashboardPage({
   const todaySessions = getTodaySessions();
   const recent = getRecentSessions(8);
   const daySummary = getDaySummary(dayKey(Date.now()));
+
+  // Provider-aware messaging for the Daily Summary card. The summary itself
+  // is still always the heuristic (the LLM-summary generator isn't wired to
+  // a button yet — see roadmap). What we *can* do honestly is reflect which
+  // provider is configured rather than hardcoding "Anthropic".
+  const llmProvider = (getSetting('llm_provider') as LlmProvider) || 'anthropic';
+  const hasLlmKey = llmProvider === 'anthropic'
+    ? Boolean(getSetting('anthropic_api_key'))
+    : Boolean(getSetting('openai_api_key'));
+  const providerLabel = llmProvider === 'openai' ? 'OpenAI' : 'Anthropic';
 
   const empty = overview.sessions === 0;
 
@@ -129,13 +141,13 @@ export default async function DashboardPage({
             <div className="p-4 text-body-md text-ink-dim leading-relaxed">
               {daySummary || heuristicSummary(todaySessions)}
             </div>
-            {!daySummary && (
+            {!daySummary && !hasLlmKey && (
               <div className="px-4 pb-4 text-[11px] text-ink-mute">
-                Add an Anthropic key in{' '}
+                Add an {providerLabel} key in{' '}
                 <Link href="/settings" className="text-primary hover:underline">
                   Settings
                 </Link>{' '}
-                for AI-written summaries.
+                to enable AI-written summaries.
               </div>
             )}
           </div>
