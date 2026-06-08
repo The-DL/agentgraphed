@@ -15,11 +15,32 @@ import {
   getTodaySessions,
   getRecentSessions,
   getDaySummary,
+  getSetting,
+  setSetting,
 } from '@/lib/queries';
+import { runIngest } from '@/lib/ingest/run';
 import { fmtCost, fmtTokens, dayKey, fmtDay } from '@/lib/format';
 import { parseRange, rangeDays, rangeLabel, rangeShortLabel } from '@/lib/range';
 
 export const dynamic = 'force-dynamic';
+
+// Auto-ingest before every dashboard render so the page always reflects what's
+// on disk. Debounced — if a scan finished within the last 10s, skip; otherwise
+// run it. Idempotent for unchanged files (ingest_state caches by mtime/size),
+// so re-running is effectively free when nothing has been written.
+const AUTO_INGEST_DEBOUNCE_MS = 10_000;
+
+async function maybeAutoIngest(): Promise<void> {
+  const lastRaw = getSetting('dashboard_last_auto_ingest_ms');
+  const lastMs = lastRaw ? parseInt(lastRaw, 10) : 0;
+  if (Date.now() - lastMs < AUTO_INGEST_DEBOUNCE_MS) return;
+  try {
+    await runIngest();
+    setSetting('dashboard_last_auto_ingest_ms', String(Date.now()));
+  } catch {
+    // Auto-ingest is best-effort; a failure here shouldn't blank the dashboard.
+  }
+}
 
 function pctDelta(cur: number, prev: number): { text: string; positive: boolean | null } {
   if (prev === 0) return { text: cur > 0 ? 'new' : '—', positive: cur > 0 ? true : null };
@@ -38,6 +59,8 @@ export default async function DashboardPage({
   const days = rangeDays(rangeKey);
   const shortLabel = rangeShortLabel(rangeKey);
   const fullLabel = rangeLabel(rangeKey).toLowerCase();
+
+  await maybeAutoIngest();
 
   const overview = getOverview();
   const range = getRangeSummary(days);
