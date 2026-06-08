@@ -88,12 +88,7 @@ export default async function DashboardPage({
               {overview.sessions.toLocaleString()} sessions all-time · {fmtTokens(overview.tokens)} tokens
             </div>
             <FreshnessIndicator lastIngestedAt={lastIngestedAt()} />
-            <ShareButton
-              imageUrl={`/api/share/dashboard?days=${days === null ? 'all' : days}`}
-              filename={`agentgraphed-${days === null ? 'all-time' : `${days}d`}.png`}
-              shareText={`${fmtTokens(range.tokens)} tokens · ${fmtCost(range.cost)} across ${range.sessions} ${range.sessions === 1 ? 'session' : 'sessions'} on ${range.projects} ${range.projects === 1 ? 'project' : 'projects'} (${shortLabel}).\n\nTracked locally with AgentGraphed\nhttps://agentgraphed.com`}
-              shareTitle="My AgentGraphed summary"
-            />
+            <ShareButton imageUrl={`/api/share/dashboard?days=${days === null ? 'all' : days}`} />
           </div>
         }
       />

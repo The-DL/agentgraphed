@@ -13,11 +13,6 @@ import { getSessionContext } from '@/lib/llm/context';
 
 export const dynamic = 'force-dynamic';
 
-function truncateForTweet(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1).trimEnd() + '…';
-}
-
 export default async function SessionDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = getSession(id);
@@ -55,12 +50,7 @@ export default async function SessionDetail({ params }: { params: Promise<{ id: 
               hasLlmKey={hasLlmKey}
               cachedContext={cached?.context ?? null}
             />
-            <ShareButton
-              imageUrl={`/api/share/session/${id}`}
-              filename={`agentgraphed-session-${id.slice(0, 8)}.png`}
-              shareText={`${fmtTokens(tokens)} tokens · ${fmtCost(session.est_cost_usd)} on "${truncateForTweet(title, 100)}"\n\nTracked locally with AgentGraphed\nhttps://agentgraphed.com`}
-              shareTitle={`AgentGraphed — ${title}`}
-            />
+            <ShareButton imageUrl={`/api/share/session/${id}`} />
           </div>
         }
       />

@@ -31,12 +31,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             {project.git_remote && (
               <span className="font-mono text-code-sm text-ink-mute">{project.git_remote}</span>
             )}
-            <ShareButton
-              imageUrl={`/api/share/project/${id}`}
-              filename={`agentgraphed-project-${project.name}.png`}
-              shareText={`${fmtTokens(project.tokens)} tokens · ${fmtCost(project.cost)} on ${project.name}\n\nTracked locally with AgentGraphed\nhttps://agentgraphed.com`}
-              shareTitle={`AgentGraphed — ${project.name}`}
-            />
+            <ShareButton imageUrl={`/api/share/project/${id}`} />
           </div>
         }
       />
