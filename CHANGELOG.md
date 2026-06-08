@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] — 2026-06-07
+
+### Fixed
+- Live quota now reads Claude credentials from the macOS Keychain entry (`Claude Code-credentials`) where recent Claude Code versions store them. Falls back to the legacy `~/.claude/.credentials.json` file when present. Keychain-sourced tokens are read-only — refresh is delegated to Claude Code itself with a clear next-step message.
+
+### Added
+- **Dashboard auto-ingest** — re-scans your CLI log directories on every dashboard render, debounced to once per 10s. Today's sessions appear without a manual rescan or re-running `npx agentgraphed`.
+- **Codex tab on the live-quota strip** — uses your `OPENAI_API_KEY` (the same one used for optional title classification) to probe OpenAI for live rate-limit headers. Strip reports the per-minute token utilization and reset countdown.
+- **Compact, collapsible quota strip** — replaces the old full-width card. Single horizontal row with provider tabs (`CLAUDE` / `CODEX`) on the left, two pills in the middle, and a hide (×) button on the right. Hidden state is restored from localStorage on next visit via a tiny "+ show live quota" link.
+
 ## [0.2.0] — 2026-06-07
 
 ### Added

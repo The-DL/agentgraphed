@@ -6,6 +6,8 @@
 
 See every session, every project, every dollar — across your whole machine. No login. No cloud. Nothing leaves your computer.
 
+🌐 **Official site:** <https://agentgraphed.com> · 📦 **npm:** <https://www.npmjs.com/package/agentgraphed>
+
 [![npm version](https://img.shields.io/npm/v/agentgraphed?color=00f5ff)](https://www.npmjs.com/package/agentgraphed)
 [![license](https://img.shields.io/badge/license-MIT-success)](./LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-success)](https://nodejs.org)
