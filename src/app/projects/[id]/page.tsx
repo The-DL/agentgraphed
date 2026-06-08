@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/PageHeader';
 import { MetricCard } from '@/components/MetricCard';
 import { SessionItem } from '@/components/SessionItem';
+import { ShareButton } from '@/components/ShareButton';
 import { getProject, getSessionsForProject } from '@/lib/queries';
 import { fmtTokens, fmtCost, fmtRelative } from '@/lib/format';
 
@@ -26,9 +27,17 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
         title={project.name}
         subtitle={project.root_path}
         right={
-          project.git_remote ? (
-            <span className="font-mono text-code-sm text-ink-mute">{project.git_remote}</span>
-          ) : null
+          <div className="flex items-center gap-3">
+            {project.git_remote && (
+              <span className="font-mono text-code-sm text-ink-mute">{project.git_remote}</span>
+            )}
+            <ShareButton
+              kind="project"
+              id={id}
+              filename={`agentgraphed-project-${project.name}.png`}
+              tweetText={`${project.name}: ${project.sessions} ${project.sessions === 1 ? 'session' : 'sessions'} · ${fmtTokens(project.tokens)} tokens · ${fmtCost(project.cost)}\n\nTracked with AgentGraphed — local-first analytics for Claude Code & Codex.\nhttps://agentgraphed.com`}
+            />
+          </div>
         }
       />
 

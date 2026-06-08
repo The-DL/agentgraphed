@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { MetricCard } from '@/components/MetricCard';
 import { CategoryBadge } from '@/components/CategoryBadge';
 import { SessionActions } from '@/components/SessionActions';
+import { ShareButton } from '@/components/ShareButton';
 import { getSession, getSessionMessages, sessionCategories } from '@/lib/queries';
 import { fmtCost, fmtDuration, fmtTokens, fmtClock } from '@/lib/format';
 import { displayTitle } from '@/lib/sessionDisplay';
@@ -11,6 +12,11 @@ import { getLlmConfig } from '@/lib/llm/client';
 import { getSessionContext } from '@/lib/llm/context';
 
 export const dynamic = 'force-dynamic';
+
+function truncateForTweet(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1).trimEnd() + '…';
+}
 
 export default async function SessionDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -41,13 +47,21 @@ export default async function SessionDetail({ params }: { params: Promise<{ id: 
           </span>
         }
         right={
-          <SessionActions
-            sessionId={id}
-            provider={session.provider}
-            cwd={session.cwd}
-            hasLlmKey={hasLlmKey}
-            cachedContext={cached?.context ?? null}
-          />
+          <div className="flex flex-col items-end gap-2">
+            <SessionActions
+              sessionId={id}
+              provider={session.provider}
+              cwd={session.cwd}
+              hasLlmKey={hasLlmKey}
+              cachedContext={cached?.context ?? null}
+            />
+            <ShareButton
+              kind="session"
+              id={id}
+              filename={`agentgraphed-session-${id.slice(0, 8)}.png`}
+              tweetText={`${fmtTokens(tokens)} tokens · ${fmtCost(session.est_cost_usd)} · ${fmtDuration(session.duration_ms)}\n\n"${truncateForTweet(title, 140)}"\n\nTracked with AgentGraphed — local-first analytics for Claude Code & Codex.\nhttps://agentgraphed.com`}
+            />
+          </div>
         }
       />
 
