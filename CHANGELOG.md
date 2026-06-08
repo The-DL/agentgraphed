@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] — 2026-06-07
+
+### Changed
+- **Live quota moved to the sidebar.** Replaces the (briefly shipped) dashboard quota cards with a hover-to-probe widget in the sidebar. Idle UI is a tiny `○ Live quota` line; on hover, a popover slides out showing both providers' rate-limit windows with bars and reset countdowns. Results cache in-component for 60s so re-hover is instant. Zero probes fire on page load — only when you actually look. Dot color reflects the binding %.
+- Page navigation got significantly faster: background fire-and-forget ingest (no longer awaited), plus a 5-second TTL memo on the heavy aggregate queries (`getDailySeries`, `getProjectBreakdown`, `getCategoryBreakdown`, `getRangeSummary`, `getOverview`, `getProviderBreakdown`, `getModelBreakdown`, `getProjects`). Warm-cache nav now consistently sub-100ms; rapid clicking lands at ~57ms.
+- Dashboard header now shows "updated Xs ago · refresh" — a small freshness indicator that doubles as an explicit force-rescan button if you want the latest right now.
+
 ## [0.2.1] — 2026-06-07
 
 ### Fixed
