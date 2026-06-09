@@ -199,6 +199,44 @@ function ensureSchema(db: Database.Database) {
 // real timestamps. Cheap, idempotent, and a no-op once message-level data is
 // complete (messages.SUM == sessions.row).
 function backfillProratedMessageTokens(db: Database.Database): void {
+  // Sessions with zero message rows at all — usually because the source JSONL
+  // is gone from disk. Seed a single synthetic placeholder message at
+  // started_at carrying the session total so the session shows up on the
+  // dashboard's date-windowed queries. The placeholder has empty content;
+  // it's not surfaced in the conversation view (we filter by content there).
+  const orphans = db
+    .prepare(
+      `SELECT s.id, s.started_at, s.model,
+              s.input_tokens, s.output_tokens, s.cache_read_tokens, s.cache_write_tokens, s.est_cost_usd
+       FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
+       WHERE m.id IS NULL
+         AND (s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens) > 0
+       GROUP BY s.id`,
+    )
+    .all() as Array<{
+      id: string; started_at: number; model: string | null;
+      input_tokens: number; output_tokens: number;
+      cache_read_tokens: number; cache_write_tokens: number;
+      est_cost_usd: number;
+    }>;
+  if (orphans.length > 0) {
+    const insert = db.prepare(
+      `INSERT INTO messages (
+         id, session_id, role, content, timestamp, model,
+         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd
+       ) VALUES (?, ?, 'assistant', '', ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const tx = db.transaction(() => {
+      for (const o of orphans) {
+        insert.run(
+          `${o.id}-orphan`, o.id, o.started_at, o.model,
+          o.input_tokens, o.output_tokens, o.cache_read_tokens, o.cache_write_tokens, o.est_cost_usd,
+        );
+      }
+    });
+    tx();
+  }
+
   const gaps = db
     .prepare(
       `SELECT s.id,
@@ -213,7 +251,8 @@ function backfillProratedMessageTokens(db: Database.Database): void {
               COUNT(CASE WHEN m.role = 'assistant' THEN 1 END) AS asst_count
        FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
        GROUP BY s.id
-       HAVING (s_in + s_out + s_cr + s_cw) > (m_in + m_out + m_cr + m_cw)
+       HAVING ((s_in + s_out + s_cr + s_cw) > (m_in + m_out + m_cr + m_cw)
+               OR s_cost > m_cost + 0.001)
           AND asst_count > 0`,
     )
     .all() as Array<{
