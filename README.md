@@ -159,3 +159,7 @@ npm pack              # creates agentgraphed-X.Y.Z.tgz
 ## License
 
 MIT © [Michael Patrick](https://github.com/sudomichael)
+
+---
+
+Built and maintained by [@ushercakes](https://x.com/ushercakes).
