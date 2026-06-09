@@ -2,11 +2,13 @@
 
 # AgentGraphed
 
-**The Claude Code usage monitor.** Local-first analytics dashboard for Claude Code & Codex CLI sessions.
+**Local-first history, search, and analytics for Claude Code and Codex.**
 
-See every session, every project, every dollar — across your whole machine. No login. No cloud. Nothing leaves your computer.
+Find old sessions, resume unfinished work, search past conversations, and see usage across every AI coding project on your machine.
 
-🌐 **Official site:** <https://agentgraphed.com> · 📦 **npm:** <https://www.npmjs.com/package/agentgraphed>
+No login. No cloud. Nothing leaves your computer.
+
+🌐 **Site:** <https://agentgraphed.com> · 📦 **npm:** <https://www.npmjs.com/package/agentgraphed>
 
 [![npm version](https://img.shields.io/npm/v/agentgraphed?color=00f5ff)](https://www.npmjs.com/package/agentgraphed)
 [![license](https://img.shields.io/badge/license-MIT-success)](./LICENSE)
@@ -14,15 +16,29 @@ See every session, every project, every dollar — across your whole machine. No
 
 </div>
 
+![AgentGraphed dashboard](./docs/screenshots/dashboard.png)
+
 ---
 
-## Install & run — one command
+## What it does
+
+AgentGraphed automatically indexes every Claude Code and Codex session on your machine. With it you can:
+
+- **Find old work** you forgot about — every session, searchable.
+- **Resume abandoned sessions** with one click.
+- **Browse project history** across every git repo you've touched.
+- **Generate context for a new chat** from any past conversation.
+- **Track usage and costs** across providers, models, and projects.
+
+Everything stays local. AgentGraphed reads the JSONL logs your CLI tools were already writing (`~/.claude/projects/`, `~/.codex/sessions/`) and turns them into a real dashboard.
+
+## Try it
 
 ```bash
 npx agentgraphed
 ```
 
-That's the whole install. No clone, no signup, no config file. The dashboard opens at <http://localhost:3737> the moment it's ready. Re-run any time to scan for new sessions.
+That's the whole install. No clone, no signup, no config file. The dashboard opens at <http://localhost:3737>. Re-run any time, or leave it running — it re-scans every 5 minutes.
 
 **Prefer a global install?**
 
@@ -31,13 +47,13 @@ npm install -g agentgraphed
 agentgraphed
 ```
 
-**Don't have npx / Node?** Install Node 20+ from <https://nodejs.org> (the LTS version is fine). Check yours with `node --version`.
+**Don't have npx / Node?** Install Node 20+ from <https://nodejs.org> (the LTS version is fine).
 
 ### What to expect on first run
 
 1. `npx agentgraphed` downloads the package once (~15 MB, takes 30-60s on a typical connection). Subsequent runs start in seconds — npm caches the package.
-2. You'll see one `npm warn exec` line and a couple of `npm warn deprecated` warnings from transitive dependencies. These are harmless; they'll go away in a future release.
-3. The dashboard server boots. You'll see:
+2. You'll see one `npm warn exec` line and a couple of `npm warn deprecated` warnings from transitive dependencies. Harmless.
+3. The dashboard server boots:
    ```
    › Starting AgentGraphed on http://localhost:3737
    › Scanning local AI coding sessions…
@@ -45,61 +61,47 @@ agentgraphed
    › Ready. Press Ctrl+C to stop.
    ```
 4. Your browser opens to the dashboard automatically.
-5. To stop the server, hit `Ctrl+C` in that terminal. Your indexed data stays at `~/.agentgraphed/agentgraphed.sqlite` for next time.
-
-![AgentGraphed dashboard](./docs/screenshots/dashboard.png)
-
----
-
-## What it does
-
-AgentGraphed reads your local Claude Code (`~/.claude/projects/`) and Codex CLI (`~/.codex/sessions/`) JSONL logs and turns them into a real dashboard. There's no agent to install on each session, no API key required to get started — it just reads files your CLI tools were already writing.
-
-After `npx agentgraphed`, here's how to use it:
-
-- **Browse your work** — Timeline groups every session by day. Multi-day sessions show `STARTED · SPANS Nd` / `CONTINUED` / `CLOSED` badges so nothing hides on a single bucket. Click any session to read the full conversation in a chat-bubble view.
-- **Resume a session** — On any session page, click *Resume session* to copy `cd <cwd> && claude --resume <id>` to your clipboard. Paste it in your terminal to pick up where you left off.
-- **Find a specific project** — Projects ranks every git repo you've worked in by activity, tokens, and cost. Click one to see only that repo's sessions.
-- **Refresh after more coding** — Re-run `npx agentgraphed`. It re-scans your CLI logs incrementally; already-ingested sessions are skipped.
-- **Get clean titles and categories** *(optional, BYO key)* — Open *Settings → LLM provider*, paste an Anthropic or OpenAI key, then click *Classify uncategorized*. Past-tense titles like "Fixed Stripe checkout bug" replace the raw first prompt. Cost is typically $0.01-0.03 for a few hundred sessions.
-- **Live quota probe** *(optional, opt-in)* — On the dashboard, click *Probe now* (or toggle *Poll every 60s*) for live 5h & 7d rate-limit utilization read straight from Anthropic. Each probe costs a single token (~$0.00006).
-
-## Features
-
-- **Dashboard** — 30-day usage chart, KPIs, top projects, work categories at a glance
-- **Timeline** — every session grouped by day, searchable, filterable by project or provider
-- **Projects** — auto-detected from git repo roots; see which projects pull the most AI time
-- **Sessions** — read past conversations in a clean chat-bubble view
-- **Resume** — one click copies `cd <cwd> && claude --resume <id>` to your clipboard
-- **Copy context** *(optional, BYO LLM key)* — generates a primer for a fresh chat
-- **Multi-label classification** *(optional, BYO LLM key)* — auto-categorizes sessions as Feature / Debugging / Planning / Refactor / Styling / DevOps / Data / Payments / Docs / Content
-- **Cost estimates** — uses LiteLLM's auto-updating pricing data (2700+ models covered)
-- **Range picker** — 7d / 30d / 90d / all-time on every chart
+5. To stop the server, hit `Ctrl+C`. Your indexed data stays at `~/.agentgraphed/agentgraphed.sqlite` for next time — even after Claude Code rotates the original log files off disk.
 
 ## Screenshots
 
 <table>
   <tr>
     <td width="50%">
-      <a href="./docs/screenshots/timeline.png"><img src="./docs/screenshots/timeline.png" alt="Timeline — every session grouped by day, with started/continued/closed badges for multi-day sessions" /></a>
-      <p align="center"><sub><b>Timeline</b> — every session, grouped by day. Multi-day sessions get <code>STARTED · SPANS Nd</code> / <code>CONTINUED</code> / <code>CLOSED</code> badges so nothing hides on one bucket.</sub></p>
+      <a href="./docs/screenshots/timeline.png"><img src="./docs/screenshots/timeline.png" alt="Timeline — find old work" /></a>
+      <p align="center"><sub><b>Find old work</b> — every session, grouped by day. Search and filter by project, provider, or model.</sub></p>
     </td>
     <td width="50%">
-      <a href="./docs/screenshots/session-detail.png"><img src="./docs/screenshots/session-detail.png" alt="Session detail — chat-bubble view of a past conversation with resume and copy-context actions" /></a>
-      <p align="center"><sub><b>Session detail</b> — read past conversations in a clean chat-bubble view. One click to resume in Claude Code or copy a primer for a fresh chat.</sub></p>
+      <a href="./docs/screenshots/session-detail.png"><img src="./docs/screenshots/session-detail.png" alt="Session detail — resume unfinished sessions" /></a>
+      <p align="center"><sub><b>Resume unfinished sessions</b> — read the full conversation, copy a one-line resume command, or generate a primer to paste into a fresh chat.</sub></p>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <a href="./docs/screenshots/projects.png"><img src="./docs/screenshots/projects.png" alt="Projects — every repo auto-detected with session count, tokens, and cost" /></a>
-      <p align="center"><sub><b>Projects</b> — every git repo you've worked in, ranked by activity. See which projects are eating your week.</sub></p>
+      <a href="./docs/screenshots/projects.png"><img src="./docs/screenshots/projects.png" alt="Projects — browse project history" /></a>
+      <p align="center"><sub><b>Browse project history</b> — every git repo you've worked in, ranked by activity. Click any project to see only its sessions.</sub></p>
     </td>
     <td width="50%">
-      <a href="./docs/screenshots/analytics.png"><img src="./docs/screenshots/analytics.png" alt="Analytics — sessions per day, provider split, model breakdown" /></a>
-      <p align="center"><sub><b>Analytics</b> — sessions per day, provider split, model breakdown with cost per model.</sub></p>
+      <a href="./docs/screenshots/analytics.png"><img src="./docs/screenshots/analytics.png" alt="Analytics — see where your AI time and money go" /></a>
+      <p align="center"><sub><b>See where your AI time goes</b> — usage by day, model, project, and category, with retail-priced cost estimates from LiteLLM's 2700+ model catalog.</sub></p>
     </td>
   </tr>
 </table>
+
+## Features
+
+- **Timeline** — every session grouped by day, with `STARTED · SPANS Nd` / `CONTINUED` / `CLOSED` badges so multi-day work doesn't hide on a single bucket.
+- **Sessions** — read past conversations in a chat-bubble view; search by content, project, provider, or model.
+- **Resume** — one click copies `cd <cwd> && claude --resume <id>` to your clipboard.
+- **Generate context** *(optional, BYO LLM key)* — produces a primer to paste into a fresh chat so you don't lose context when resuming.
+- **Projects** — auto-detected from git repo roots; per-project usage, model spend, and session history.
+- **Dashboard** — usage chart, KPIs, top projects, work-type breakdown, per-model cost. Filter the whole dashboard by project or model family.
+- **Auto-classification** *(optional, BYO LLM key, on by default)* — categorizes sessions as Feature / Debugging / Planning / Refactor / Styling / DevOps / Data / Payments / Docs / Content and writes a clean past-tense title for each. Typically a few cents for hundreds of sessions.
+- **Live quota probe** *(optional)* — hover the sidebar widget to read your live Anthropic 5h/7d and OpenAI per-minute rate-limit utilization. Single-token probes (~$0.00006 each).
+- **Share** — generate a stat-card PNG of your dashboard, project, or session view and copy it straight to your clipboard.
+- **Background ingest** — re-scans local logs every 5 minutes; new sessions appear without you doing anything.
+- **Cost estimates** — LiteLLM's auto-updating retail pricing for 2700+ models. Treat as directional.
+- **Range picker** — 7d / 30d / 90d / all-time on every chart, with auto-suggested log scale when the data is long-tailed.
 
 ## Privacy
 

@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] — 2026-06-09
+
+### Fixed
+- **Multi-day sessions now count tokens on the days they actually happened.** Previously a conversation opened Saturday and still active Tuesday attributed every token to Saturday, so the dashboard showed zero usage for Sunday/Monday/Tuesday even when 95% of the work happened then. The dashboard now sums tokens from per-message timestamps; the messages table gained per-message token + cost columns; the ingester writes them straight from each Claude `message.usage` block. Codex token attribution is best-effort — its log only reports running totals, not per-message — but lands tokens on the right calendar day in practice.
+- **Sessions whose source JSONLs were rotated off disk by Claude Code keep their totals.** Added an idempotent backfill that reconciles message-level totals against the session row's totals on every boot. When messages.SUM lags sessions.row (because the source file is gone, or the migration only saw a subagent fragment), the gap is distributed evenly across the assistant messages we have, anchored on real timestamps. Orphaned sessions with no message rows at all get a synthetic placeholder so they still appear on the dashboard.
+- **`?range=all` was silently rendering the last 30 days.** `rangeDays('all')` used `?? 30` as a missing-key fallback, but `??` doesn't distinguish "no match" from "match with value null" — so the All-time option collapsed to 30. Latent for the lifetime of the range picker; surfaced once historical message data started flowing through the new attribution path.
+- **Claude subagent files no longer wipe their parent transcript's messages.** Claude Code emits one main JSONL plus one per-subagent under `<sessionId>/subagents/*.jsonl`, all sharing the same sessionId. The ingester's DELETE-then-INSERT-by-session meant whichever subagent finished last left only its own messages. Switched to upsert keyed on Claude's stable per-message UUID; subagent files now accumulate alongside the parent.
+- **Codex "resetting" quota label.** OpenAI's per-minute rate-limit window resets continuously; by the time we render, the header has already elapsed. Now shows `<1m` for windows that just rolled.
+- **Auto-log scale heuristic.** Switched the peak-vs-quiet ratio from peak/median (5× on a billion-token spike) to peak/p10 with a 50× threshold so long-tailed multi-month histories actually flip to log instead of squashing flat against the X-axis.
+
+### Added
+- **Server-side 5-minute scheduled ingest.** The dashboard's per-render trigger only fires when a tab is open; the scheduler keeps scanning your log directories whether or not anyone's looking. Bootstrapped from the first per-render `triggerBackgroundIngest()` call (globalThis-keyed for idempotency); `unref()`'d so it can't keep the process alive at shutdown. No instrumentation hook needed.
+- **Schema versioning** with on-boot migrations + invalidated `ingest_state` so future ingest semantic changes ship cleanly.
+
+### Changed
+- **CI publish uses npm Trusted Publisher OIDC** instead of a long-lived `NPM_TOKEN`. The runner upgrades to `npm@latest` (≥11.5.1 is required for OIDC); `--provenance` still attaches a sigstore attestation tying the package to the workflow run.
+
 ## [0.3.0] — 2026-06-08
 
 ### Added
