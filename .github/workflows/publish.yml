@@ -24,7 +24,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # softprops/action-gh-release needs this to create the GitHub Release page
       id-token: write   # for npm provenance attestation
     steps:
       - uses: actions/checkout@v4
