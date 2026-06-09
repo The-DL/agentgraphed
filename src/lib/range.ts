@@ -18,7 +18,11 @@ export function parseRange(raw: string | undefined | null): RangeKey {
 }
 
 export function rangeDays(key: RangeKey): number | null {
-  return RANGE_OPTIONS.find((o) => o.key === key)?.days ?? 30;
+  // Have to distinguish "match found, days intentionally null (All time)" from
+  // "no match, fall back to 30". Using `?? 30` collapsed both cases because
+  // ?? treats null as missing — which silently demoted ?range=all to 30 days.
+  const match = RANGE_OPTIONS.find((o) => o.key === key);
+  return match ? match.days : 30;
 }
 
 export function rangeLabel(key: RangeKey): string {
