@@ -18,10 +18,33 @@ import { classifyBatch, getUnclassifiedRows } from '../llm/classify';
 import { getLlmConfig } from '../llm/client';
 
 const DEBOUNCE_MS = 10_000;
+const TICK_MS = 5 * 60_000;
 const AUTO_CLASSIFY_THRESHOLD = 5;
 let inFlight: Promise<void> | null = null;
 
+// Boot a single global setInterval that keeps re-triggering the ingest even
+// when no dashboard tab is open. Idempotent via a globalThis-keyed Symbol so
+// per-render calls + dev hot-reloads don't pile up duplicate timers. We hang
+// the bootstrap off the first per-render trigger (rather than Next's
+// instrumentation hook) because instrumentation pulled the better-sqlite3
+// import chain into the edge bundle and the workarounds for that were nasty.
+const SCHEDULER_KEY = Symbol.for('agentgraphed.periodic-ingest');
+type SchedulerGlobal = typeof globalThis & { [SCHEDULER_KEY]?: NodeJS.Timeout };
+function ensurePeriodicScheduler(): void {
+  const g = globalThis as SchedulerGlobal;
+  if (g[SCHEDULER_KEY]) return;
+  g[SCHEDULER_KEY] = setInterval(() => {
+    triggerBackgroundIngest();
+  }, TICK_MS);
+  // Don't keep the event loop alive solely for this timer.
+  if (typeof g[SCHEDULER_KEY]?.unref === 'function') g[SCHEDULER_KEY]!.unref();
+}
+
 export function triggerBackgroundIngest(): void {
+  // First call boots the global 5-minute timer so we keep scanning even when
+  // no tab is open. Idempotent — subsequent calls are a single cheap check.
+  ensurePeriodicScheduler();
+
   // If a scan is already running, don't start another.
   if (inFlight) return;
 
