@@ -8,15 +8,19 @@ type Point = { day: string; sessions: number; tokens: number; cost: number };
 type Metric = 'tokens' | 'sessions' | 'cost';
 type Scale = 'lin' | 'log';
 
-// When the peak value is >> the typical day, linear scale flattens everything
-// else into invisibility. Suggest log automatically.
+// When the peak day is >> the quiet days, linear scale flattens everything
+// below the peak into the X-axis baseline. Use p10 (not median) to catch
+// long-tailed histories where many quiet days are visible-vs-invisible:
+// a multi-month range with one billion-token day and a baseline of half a
+// million is a textbook "show me a log chart" situation, but its median
+// can sit comfortably mid-range and the median-based heuristic stays in lin.
 function suggestLog(data: Point[], metric: Metric): boolean {
   const values = data.map((d) => d[metric] as number).filter((v) => v > 0);
   if (values.length < 5) return false;
   const sorted = [...values].sort((a, b) => a - b);
   const peak = sorted[sorted.length - 1];
-  const median = sorted[Math.floor(sorted.length / 2)];
-  return peak / Math.max(median, 1) > 10;
+  const p10 = sorted[Math.max(0, Math.floor(values.length * 0.1) - 1)];
+  return peak / Math.max(p10, 1) > 50;
 }
 
 export function UsageChartCard({
