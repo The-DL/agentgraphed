@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.3] — 2026-06-09
+
+### Changed
+- **Every release is now boot-verified on macOS, Windows, and Linux before being declared good.** The CI publish workflow gained a `verify-platforms` matrix that pulls the freshly-published tarball from the npm registry and boots the dashboard on `macos-latest`, `windows-latest`, and `ubuntu-latest`. The 0.1.0–0.3.1 Apple Silicon dlopen bug would have died here — the previous in-job verification ran on the same Linux runner that built the bundle, so the platform mismatch never surfaced. No code changes; product behavior identical to 0.3.2.
+
 ## [0.3.2] — 2026-06-09
 
 ### Fixed
