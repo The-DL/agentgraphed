@@ -85,3 +85,89 @@ jobs:
             **npm:** https://www.npmjs.com/package/agentgraphed/v/${{ github.ref_name }}
 
             Install: `npx agentgraphed`
+
+  # Pull the just-published tarball from the npm registry and boot it on
+  # every supported platform. This is the test that would have caught the
+  # 0.1.0-0.3.1 Apple Silicon dlopen bug — the publish job ran on Linux, so
+  # the embedded better-sqlite3 binary was Linux-only and broke every macOS
+  # and Windows user. Cross-platform install verification needs to happen
+  # against what npm actually serves, not what the build runner has on disk.
+  #
+  # This runs AFTER publish. A failure here means the package is live but
+  # broken on some platforms — surface loudly so we can yank/repair fast.
+  verify-platforms:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Wait for the version we just published to be readable from the npm
+      # registry. CDN propagation is usually instant, but give it up to ~60s
+      # before declaring a failure.
+      - name: Wait for npm registry to serve the new version
+        shell: bash
+        run: |
+          set -e
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if npm view "agentgraphed@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+              echo "npm is serving agentgraphed@${{ steps.ver.outputs.version }}"
+              exit 0
+            fi
+            echo "Not visible yet, retrying in 5s..."
+            sleep 5
+          done
+          echo "Timed out waiting for the registry to serve the new version" >&2
+          exit 1
+
+      # Install + boot from the registry (not a local tarball). This is the
+      # exact command a brand-new user runs.
+      - name: Install + boot from npm
+        shell: bash
+        run: |
+          set -e
+          mkdir -p verify && cd verify
+          npm init -y > /dev/null
+          npm install "agentgraphed@${{ steps.ver.outputs.version }}" --no-audit --no-fund
+
+          DATA_DIR="$PWD/.data"
+          mkdir -p "$DATA_DIR"
+          AGENTGRAPHED_DATA_DIR="$DATA_DIR" AGENTGRAPHED_PORT=4747 \
+            node ./node_modules/agentgraphed/bin/agentgraphed.js > server.log 2>&1 &
+          PID=$!
+
+          # Poll for readiness up to ~30 seconds.
+          OK=0
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if curl -sf http://127.0.0.1:4747/ > /dev/null 2>&1; then OK=1; break; fi
+            sleep 2
+          done
+
+          if [ "$OK" != "1" ]; then
+            echo "::error::agentgraphed did not start on ${{ matrix.os }}"
+            echo "----- server.log -----"
+            cat server.log || true
+            kill "$PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4747/)
+          echo "GET / -> $CODE on ${{ matrix.os }}"
+
+          kill "$PID" 2>/dev/null || true
+
+          if [ "$CODE" != "200" ]; then
+            echo "::error::dashboard returned $CODE on ${{ matrix.os }}"
+            exit 1
+          fi
