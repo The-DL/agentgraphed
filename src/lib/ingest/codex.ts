@@ -311,6 +311,10 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
     file,
   );
 
+  // Codex sessions live in a single JSONL file (no subagent fan-out like
+  // Claude), and Codex message IDs aren't stable across re-ingests, so we
+  // wipe-by-session + insert here. Re-ingesting one Codex file is fine; the
+  // session is fully self-contained.
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
   const insertMessage = db.prepare(
     `INSERT INTO messages (

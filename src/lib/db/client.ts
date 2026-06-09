@@ -163,7 +163,11 @@ function ensureSchema(db: Database.Database) {
   // ingest_state so every file gets re-read on the next scan. Cheap: the
   // ingesters already idempotently upsert sessions + messages by id, so a
   // re-ingest just refreshes the per-message token columns we just added.
-  const SCHEMA_VERSION = '2';
+  // Bump this when message ingestion semantics change so existing rows get
+  // rebuilt on next boot from the source JSONLs. v2 added per-message token
+  // columns; v3 fixes the multi-file Claude session collision where subagent
+  // files were wiping the parent transcript's messages.
+  const SCHEMA_VERSION = '3';
   const prev = db.prepare('SELECT value FROM settings WHERE key = ?').get('schema_version') as
     | { value: string }
     | undefined;
@@ -175,4 +179,96 @@ function ensureSchema(db: Database.Database) {
       SCHEMA_VERSION,
     );
   }
+
+  // After the migration + re-ingest, some sessions will have message rows
+  // with zero tokens because their source JSONL files were rotated off disk
+  // by Claude Code. Those sessions still have correct totals on the sessions
+  // row, so we prorate session totals across their message rows weighted by
+  // assistant-message timestamp. Cheap, idempotent, and only touches rows
+  // that ended up at zero. Runs every boot — if a session re-ingest later
+  // populates real per-message tokens, this is a no-op for it.
+  backfillProratedMessageTokens(db);
+}
+
+// Reconcile message-level token totals against the session row's totals.
+// When messages.SUM < sessions.row (the common case for sessions whose source
+// JSONL files have been rotated off disk, OR for ingests that only saw a
+// subagent file), distribute the missing tokens across the assistant messages
+// we DO have, weighted evenly by message. Keeps historical dashboard totals
+// honest without lying about per-day attribution: messages still sit on their
+// real timestamps. Cheap, idempotent, and a no-op once message-level data is
+// complete (messages.SUM == sessions.row).
+function backfillProratedMessageTokens(db: Database.Database): void {
+  const gaps = db
+    .prepare(
+      `SELECT s.id,
+              s.input_tokens AS s_in, s.output_tokens AS s_out,
+              s.cache_read_tokens AS s_cr, s.cache_write_tokens AS s_cw,
+              s.est_cost_usd AS s_cost,
+              COALESCE(SUM(m.input_tokens), 0) AS m_in,
+              COALESCE(SUM(m.output_tokens), 0) AS m_out,
+              COALESCE(SUM(m.cache_read_tokens), 0) AS m_cr,
+              COALESCE(SUM(m.cache_write_tokens), 0) AS m_cw,
+              COALESCE(SUM(m.est_cost_usd), 0) AS m_cost,
+              COUNT(CASE WHEN m.role = 'assistant' THEN 1 END) AS asst_count
+       FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
+       GROUP BY s.id
+       HAVING (s_in + s_out + s_cr + s_cw) > (m_in + m_out + m_cr + m_cw)
+          AND asst_count > 0`,
+    )
+    .all() as Array<{
+      id: string;
+      s_in: number; s_out: number; s_cr: number; s_cw: number; s_cost: number;
+      m_in: number; m_out: number; m_cr: number; m_cw: number; m_cost: number;
+      asst_count: number;
+    }>;
+
+  if (gaps.length === 0) return;
+
+  const getAssistantMsgs = db.prepare(
+    `SELECT id FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY timestamp`,
+  );
+  const bumpMsg = db.prepare(
+    `UPDATE messages SET
+       input_tokens = input_tokens + ?,
+       output_tokens = output_tokens + ?,
+       cache_read_tokens = cache_read_tokens + ?,
+       cache_write_tokens = cache_write_tokens + ?,
+       est_cost_usd = est_cost_usd + ?
+     WHERE id = ?`,
+  );
+
+  const tx = db.transaction(() => {
+    for (const g of gaps) {
+      const msgs = getAssistantMsgs.all(g.id) as { id: string }[];
+      if (msgs.length === 0) continue;
+      const n = msgs.length;
+      const missIn = Math.max(0, g.s_in - g.m_in);
+      const missOut = Math.max(0, g.s_out - g.m_out);
+      const missCr = Math.max(0, g.s_cr - g.m_cr);
+      const missCw = Math.max(0, g.s_cw - g.m_cw);
+      const missCost = Math.max(0, g.s_cost - g.m_cost);
+      const perIn = Math.floor(missIn / n);
+      const perOut = Math.floor(missOut / n);
+      const perCr = Math.floor(missCr / n);
+      const perCw = Math.floor(missCw / n);
+      const perCost = missCost / n;
+      const remIn = missIn - perIn * n;
+      const remOut = missOut - perOut * n;
+      const remCr = missCr - perCr * n;
+      const remCw = missCw - perCw * n;
+      for (let i = 0; i < n; i++) {
+        const isLast = i === n - 1;
+        bumpMsg.run(
+          perIn + (isLast ? remIn : 0),
+          perOut + (isLast ? remOut : 0),
+          perCr + (isLast ? remCr : 0),
+          perCw + (isLast ? remCw : 0),
+          perCost,
+          msgs[i].id,
+        );
+      }
+    }
+  });
+  tx();
 }

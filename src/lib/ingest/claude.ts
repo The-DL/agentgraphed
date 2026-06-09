@@ -332,12 +332,28 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
     file,
   );
 
-  db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+  // IMPORTANT: do not DELETE-then-INSERT messages per session. Claude Code
+  // emits *multiple* JSONL files for the same sessionId — one main transcript
+  // plus per-subagent files under <sessionId>/subagents/*.jsonl — and each one
+  // gets ingested separately. Wiping by sessionId on every file means the
+  // *last* subagent file processed ends up as the only surviving message set
+  // for that session. Use upsert keyed on (id) instead: Claude provides
+  // stable per-message UUIDs, so each file's messages accumulate correctly
+  // into the shared session. On conflict, refresh the token columns from the
+  // incoming row — this lets a re-ingest correct earlier 0-token writes
+  // (e.g. rows seeded by the prorated backfill that later get a real
+  // per-message ingest).
   const insertMessage = db.prepare(
     `INSERT INTO messages (
        id, session_id, role, content, timestamp, model,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       input_tokens = excluded.input_tokens,
+       output_tokens = excluded.output_tokens,
+       cache_read_tokens = excluded.cache_read_tokens,
+       cache_write_tokens = excluded.cache_write_tokens,
+       est_cost_usd = excluded.est_cost_usd`,
   );
   const tx = db.transaction((rows: typeof messages) => {
     for (const m of rows) {
