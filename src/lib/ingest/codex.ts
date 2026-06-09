@@ -117,7 +117,25 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
     secondary_window_minutes: number | null;
     secondary_resets_at: number | null;
   } | null = null;
-  const messages: Array<{ id: string; role: string; content: string; timestamp: number; model: string | null }> = [];
+  const messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    timestamp: number;
+    model: string | null;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    est_cost_usd: number;
+  }> = [];
+  // Codex reports cumulative `total_token_usage` snapshots, not per-message
+  // tokens. To attribute fairly to message timestamps we record the running
+  // total at each token_count event and attribute the *delta* to the most
+  // recent assistant message that hasn't been credited yet.
+  let creditedIn = 0;
+  let creditedOut = 0;
+  let creditedCacheR = 0;
 
   for await (const raw of rl) {
     if (!raw.trim()) continue;
@@ -156,6 +174,11 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
           content: text,
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
           model: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          est_cost_usd: 0,
         });
         messageCount += 1;
       } else if (role === 'assistant') {
@@ -165,6 +188,11 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
           content: text.slice(0, 4000),
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
           model: lastModel,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          est_cost_usd: 0,
         });
         messageCount += 1;
       }
@@ -183,6 +211,34 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
         inputTokens += t.input_tokens ?? 0;
         outputTokens += (t.output_tokens ?? 0) + (t.reasoning_output_tokens ?? 0);
         cacheRead += t.cached_input_tokens ?? 0;
+      }
+
+      // Attribute the just-arrived delta to the most recent assistant message
+      // we haven't credited yet. This is a best-effort split — Codex doesn't
+      // give us a per-message breakdown, but the running totals + per-message
+      // timestamps are usually enough to land tokens on the right calendar day.
+      const deltaIn = inputTokens - creditedIn;
+      const deltaOut = outputTokens - creditedOut;
+      const deltaCacheR = cacheRead - creditedCacheR;
+      if (deltaIn > 0 || deltaOut > 0 || deltaCacheR > 0) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (m.role !== 'assistant') continue;
+          if (m.input_tokens || m.output_tokens || m.cache_read_tokens) continue;
+          m.input_tokens = deltaIn;
+          m.output_tokens = deltaOut;
+          m.cache_read_tokens = deltaCacheR;
+          m.est_cost_usd = estimateCost({
+            model: m.model || lastModel,
+            inputTokens: deltaIn,
+            outputTokens: deltaOut,
+            cacheReadTokens: deltaCacheR,
+          });
+          creditedIn = inputTokens;
+          creditedOut = outputTokens;
+          creditedCacheR = cacheRead;
+          break;
+        }
       }
 
       // Codex also ships rate-limit (quota) info inline — capture the freshest snapshot.
@@ -257,10 +313,16 @@ async function ingestOneCodexFile(file: string): Promise<{ sessionId: string; me
 
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
   const insertMessage = db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, timestamp, model) VALUES (?, ?, ?, ?, ?, ?)',
+    `INSERT INTO messages (
+       id, session_id, role, content, timestamp, model,
+       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const tx = db.transaction((rows: typeof messages) => {
-    for (const m of rows) insertMessage.run(m.id, sessionId, m.role, m.content, m.timestamp, m.model);
+    for (const m of rows) insertMessage.run(
+      m.id, sessionId, m.role, m.content, m.timestamp, m.model,
+      m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_write_tokens, m.est_cost_usd,
+    );
   });
   tx(messages);
 

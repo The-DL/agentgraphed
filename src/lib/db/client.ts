@@ -146,4 +146,33 @@ function ensureSchema(db: Database.Database) {
              SET categories = json_array(category)
              WHERE category IS NOT NULL AND categories IS NULL`);
   }
+
+  // Per-message token columns. Older DBs only stored token totals on
+  // sessions, which made multi-day sessions impossible to attribute to the
+  // day the work actually happened on. Backfilling requires a re-scan of the
+  // source JSONL files — see ingest_state invalidation below.
+  const msgCols = db.prepare('PRAGMA table_info(messages)').all() as { name: string }[];
+  const msgColNames = new Set(msgCols.map((c) => c.name));
+  if (!msgColNames.has('input_tokens')) db.exec('ALTER TABLE messages ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0');
+  if (!msgColNames.has('output_tokens')) db.exec('ALTER TABLE messages ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0');
+  if (!msgColNames.has('cache_read_tokens')) db.exec('ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0');
+  if (!msgColNames.has('cache_write_tokens')) db.exec('ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0');
+  if (!msgColNames.has('est_cost_usd')) db.exec('ALTER TABLE messages ADD COLUMN est_cost_usd REAL NOT NULL DEFAULT 0');
+
+  // Schema-version-driven re-ingest. When SCHEMA_VERSION bumps, we drop
+  // ingest_state so every file gets re-read on the next scan. Cheap: the
+  // ingesters already idempotently upsert sessions + messages by id, so a
+  // re-ingest just refreshes the per-message token columns we just added.
+  const SCHEMA_VERSION = '2';
+  const prev = db.prepare('SELECT value FROM settings WHERE key = ?').get('schema_version') as
+    | { value: string }
+    | undefined;
+  if (prev?.value !== SCHEMA_VERSION) {
+    db.exec('DELETE FROM ingest_state');
+    db.exec('DELETE FROM messages');
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+      'schema_version',
+      SCHEMA_VERSION,
+    );
+  }
 }

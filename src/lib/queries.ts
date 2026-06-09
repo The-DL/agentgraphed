@@ -314,12 +314,15 @@ function _getDailySeries(days: number | null, projectId: string | null, modelFam
   const db = getSqlite();
   let since: number;
   let bucketDays: number;
-  const projClause = projectId ? ' AND project_id = ?' : '';
+  const projClause = projectId ? ' AND s.project_id = ?' : '';
   const projParam: unknown[] = projectId ? [projectId] : [];
-  const mc = modelClause(modelFamily);
+  const mc = modelClause(modelFamily, 's');
   if (days === null) {
     const earliest = db
-      .prepare(`SELECT MIN(started_at) AS min FROM sessions WHERE 1=1${projClause}${mc.sql}`)
+      .prepare(
+        `SELECT MIN(m.timestamp) AS min FROM messages m
+         JOIN sessions s ON s.id = m.session_id WHERE 1=1${projClause}${mc.sql}`,
+      )
       .get(...projParam, ...mc.params) as { min: number | null };
     if (!earliest.min) return [];
     since = earliest.min;
@@ -328,13 +331,18 @@ function _getDailySeries(days: number | null, projectId: string | null, modelFam
     since = Date.now() - days * 86_400_000;
     bucketDays = days;
   }
+  // Pull one row per message in range, bucket by the day each message landed
+  // on. "Sessions" per day = distinct session_ids that touched that day.
   const rows = db
     .prepare(
-      `SELECT started_at, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd
-       FROM sessions WHERE started_at >= ?${projClause}${mc.sql}`,
+      `SELECT m.timestamp, m.session_id,
+              m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_write_tokens, m.est_cost_usd
+       FROM messages m JOIN sessions s ON s.id = m.session_id
+       WHERE m.timestamp >= ?${projClause}${mc.sql}`,
     )
     .all(since, ...projParam, ...mc.params) as Array<{
-      started_at: number;
+      timestamp: number;
+      session_id: string;
       input_tokens: number;
       output_tokens: number;
       cache_read_tokens: number;
@@ -342,20 +350,26 @@ function _getDailySeries(days: number | null, projectId: string | null, modelFam
       est_cost_usd: number;
     }>;
   const map = new Map<string, DailyPoint>();
+  const sessionsByDay = new Map<string, Set<string>>();
   for (let i = 0; i < bucketDays; i++) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     d.setHours(0, 0, 0, 0);
     const k = dayKey(d.getTime());
     map.set(k, { day: k, sessions: 0, tokens: 0, cost: 0 });
+    sessionsByDay.set(k, new Set());
   }
   for (const r of rows) {
-    const k = dayKey(r.started_at);
+    const k = dayKey(r.timestamp);
     const p = map.get(k);
     if (!p) continue;
-    p.sessions += 1;
     p.tokens += r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
     p.cost += r.est_cost_usd;
+    sessionsByDay.get(k)!.add(r.session_id);
+  }
+  for (const [k, set] of sessionsByDay) {
+    const p = map.get(k);
+    if (p) p.sessions = set.size;
   }
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
@@ -386,18 +400,23 @@ export function getModelBreakdown(
 }
 
 function _getModelBreakdown(days: number | null, projectId: string | null): { model: string; sessions: number; tokens: number; cost: number }[] {
-  const conds: string[] = [];
+  // Aggregate from messages (which carry per-message model) so multi-model
+  // sessions split across the right families and the day window is honest.
+  // Sessions per model = distinct session_ids that ever used that model in
+  // the window — by design, a multi-model session counts for each model.
+  const conds: string[] = ['m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens > 0'];
   const params: unknown[] = [];
-  if (days !== null) { conds.push('started_at >= ?'); params.push(Date.now() - days * 86_400_000); }
-  if (projectId) { conds.push('project_id = ?'); params.push(projectId); }
-  const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
+  if (days !== null) { conds.push('m.timestamp >= ?'); params.push(Date.now() - days * 86_400_000); }
+  if (projectId) { conds.push('s.project_id = ?'); params.push(projectId); }
+  const where = `WHERE ${conds.join(' AND ')}`;
   const raw = getSqlite()
     .prepare(
-      `SELECT COALESCE(model, 'unknown') AS model,
-              COUNT(*) AS sessions,
-              SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens,
-              SUM(est_cost_usd) AS cost
-       FROM sessions ${where} GROUP BY model`,
+      `SELECT COALESCE(m.model, s.model, 'unknown') AS model,
+              COUNT(DISTINCT m.session_id) AS sessions,
+              SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens) AS tokens,
+              SUM(m.est_cost_usd) AS cost
+       FROM messages m JOIN sessions s ON s.id = m.session_id
+       ${where} GROUP BY COALESCE(m.model, s.model, 'unknown')`,
     )
     .all(...params) as { model: string; sessions: number; tokens: number; cost: number }[];
 
@@ -490,14 +509,18 @@ export function getProjectBreakdown(
 function _getProjectBreakdown(days: number | null, topN: number, modelFamily: string | null): ProjectBreakdown[] {
   const since = days === null ? 0 : Date.now() - days * 86_400_000;
   const mc = modelClause(modelFamily, 's');
+  // Sum message-level tokens within the window so a multi-day session shows
+  // up under its real day-of-activity, not just the day it was opened.
   return getSqlite()
     .prepare(
       `SELECT p.id, p.name, p.last_active,
-              COUNT(s.id) AS sessions,
-              COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens), 0) AS tokens,
-              COALESCE(SUM(s.est_cost_usd), 0) AS cost
-       FROM projects p JOIN sessions s ON s.project_id = p.id
-       WHERE s.started_at >= ?${mc.sql}
+              COUNT(DISTINCT s.id) AS sessions,
+              COALESCE(SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens,
+              COALESCE(SUM(m.est_cost_usd), 0) AS cost
+       FROM projects p
+         JOIN sessions s ON s.project_id = p.id
+         JOIN messages m ON m.session_id = s.id
+       WHERE m.timestamp >= ?${mc.sql}
        GROUP BY p.id ORDER BY tokens DESC LIMIT ?`,
     )
     .all(since, ...mc.params, topN) as ProjectBreakdown[];
@@ -517,14 +540,19 @@ export function getCategoryBreakdown(
 
 function _getCategoryBreakdown(days: number | null, projectId: string | null, modelFamily: string | null): { category: string; sessions: number; tokens: number }[] {
   const since = days === null ? 0 : Date.now() - days * 86_400_000;
-  const projClause = projectId ? ' AND project_id = ?' : '';
+  const projClause = projectId ? ' AND s.project_id = ?' : '';
   const projParam: unknown[] = projectId ? [projectId] : [];
-  const mc = modelClause(modelFamily);
+  const mc = modelClause(modelFamily, 's');
+  // Sum tokens per session from message rows inside the window, then attribute
+  // by the session's category labels. Sessions whose messages don't reach into
+  // the window naturally fall out (tokens = 0 → no row).
   const rows = getSqlite()
     .prepare(
-      `SELECT category, categories,
-              (input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens
-       FROM sessions WHERE started_at >= ?${projClause}${mc.sql}`,
+      `SELECT s.category, s.categories,
+              COALESCE(SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens
+       FROM messages m JOIN sessions s ON s.id = m.session_id
+       WHERE m.timestamp >= ?${projClause}${mc.sql}
+       GROUP BY s.id`,
     )
     .all(since, ...projParam, ...mc.params) as { category: string | null; categories: string | null; tokens: number }[];
 
@@ -571,24 +599,32 @@ export function getRangeSummary(
   );
 }
 
+// Roll up token + cost from per-message rows, so multi-day sessions get
+// attributed to the calendar days they actually touched. Sessions / projects
+// counts are "had any activity in the window" — same logic, derived from
+// distinct session_ids / project_ids in the message slice.
 function _getRangeSummary(days: number | null, projectId: string | null, modelFamily: string | null): RangeSummary {
   const db = getSqlite();
   const now = Date.now();
   const start = days === null ? 0 : now - days * 86_400_000;
   const prevStart = days === null ? 0 : start - days * 86_400_000;
-  const projClause = projectId ? ' AND project_id = ?' : '';
+  const projClause = projectId ? ' AND s.project_id = ?' : '';
   const projParam: unknown[] = projectId ? [projectId] : [];
-  const mc = modelClause(modelFamily);
+  const mc = modelClause(modelFamily, 's');
+
+  const sql = (lo: string, hi: string | null) => `
+    SELECT
+      COUNT(DISTINCT m.session_id) AS sessions,
+      COUNT(DISTINCT s.project_id) AS projects,
+      COALESCE(SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens,
+      COALESCE(SUM(m.est_cost_usd), 0) AS cost,
+      COUNT(DISTINCT strftime('%Y-%m', m.timestamp/1000, 'unixepoch')) AS active_months
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE m.timestamp >= ?${hi ? ' AND m.timestamp < ?' : ''}${projClause}${mc.sql}
+  `;
 
   const cur = db
-    .prepare(
-      `SELECT COUNT(*) AS sessions,
-              COUNT(DISTINCT project_id) AS projects,
-              COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
-              COALESCE(SUM(est_cost_usd), 0) AS cost,
-              COUNT(DISTINCT strftime('%Y-%m', started_at/1000, 'unixepoch')) AS active_months
-       FROM sessions WHERE started_at >= ?${projClause}${mc.sql}`,
-    )
+    .prepare(sql('m.timestamp >= ?', null))
     .get(start, ...projParam, ...mc.params) as {
       sessions: number;
       projects: number;
@@ -602,15 +638,10 @@ function _getRangeSummary(days: number | null, projectId: string | null, modelFa
   }
 
   const prev = db
-    .prepare(
-      `SELECT COUNT(*) AS sessions,
-              COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
-              COALESCE(SUM(est_cost_usd), 0) AS cost,
-              COUNT(DISTINCT strftime('%Y-%m', started_at/1000, 'unixepoch')) AS active_months
-       FROM sessions WHERE started_at >= ? AND started_at < ?${projClause}${mc.sql}`,
-    )
+    .prepare(sql('m.timestamp >= ?', 'm.timestamp < ?'))
     .get(prevStart, start, ...projParam, ...mc.params) as {
       sessions: number;
+      projects: number;
       tokens: number;
       cost: number;
       active_months: number;

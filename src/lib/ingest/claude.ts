@@ -174,7 +174,18 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
   let cacheWrite = 0;
   let firstPrompt: string | null = null;
   const limitEvents: Array<{ observed_at: number; reset_at: number; kind: string; raw: string }> = [];
-  const messages: Array<{ id: string; role: string; content: string; timestamp: number; model: string | null }> = [];
+  const messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    timestamp: number;
+    model: string | null;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    est_cost_usd: number;
+  }> = [];
 
   for await (const raw of rl) {
     if (!raw.trim()) continue;
@@ -219,26 +230,47 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
           content: text,
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
           model: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          est_cost_usd: 0,
         });
         messageCount += 1;
       }
     } else if (line.type === 'assistant' && line.message) {
       if (line.message.model) lastModel = line.message.model;
       const u = line.message.usage;
+      const msgIn = u?.input_tokens || 0;
+      const msgOut = u?.output_tokens || 0;
+      const msgCacheR = u?.cache_read_input_tokens || 0;
+      const msgCacheW = u?.cache_creation_input_tokens || 0;
       if (u) {
-        inputTokens += u.input_tokens || 0;
-        outputTokens += u.output_tokens || 0;
-        cacheRead += u.cache_read_input_tokens || 0;
-        cacheWrite += u.cache_creation_input_tokens || 0;
+        inputTokens += msgIn;
+        outputTokens += msgOut;
+        cacheRead += msgCacheR;
+        cacheWrite += msgCacheW;
       }
       const text = flattenContent(line.message.content);
       if (text) {
+        const msgCost = estimateCost({
+          model: line.message.model || lastModel,
+          inputTokens: msgIn,
+          outputTokens: msgOut,
+          cacheReadTokens: msgCacheR,
+          cacheWriteTokens: msgCacheW,
+        });
         messages.push({
           id: line.uuid || randomUUID(),
           role: 'assistant',
           content: text.slice(0, 4000),
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
           model: line.message.model || null,
+          input_tokens: msgIn,
+          output_tokens: msgOut,
+          cache_read_tokens: msgCacheR,
+          cache_write_tokens: msgCacheW,
+          est_cost_usd: msgCost,
         });
         messageCount += 1;
       }
@@ -302,10 +334,18 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
 
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
   const insertMessage = db.prepare(
-    'INSERT INTO messages (id, session_id, role, content, timestamp, model) VALUES (?, ?, ?, ?, ?, ?)',
+    `INSERT INTO messages (
+       id, session_id, role, content, timestamp, model,
+       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const tx = db.transaction((rows: typeof messages) => {
-    for (const m of rows) insertMessage.run(m.id, sessionId, m.role, m.content, m.timestamp, m.model);
+    for (const m of rows) {
+      insertMessage.run(
+        m.id, sessionId, m.role, m.content, m.timestamp, m.model,
+        m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_write_tokens, m.est_cost_usd,
+      );
+    }
   });
   tx(messages);
 
