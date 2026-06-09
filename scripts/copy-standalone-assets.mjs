@@ -55,6 +55,14 @@ const prunePaths = [
   // AMP validator is only used by Next's AMP pages, which AgentGraphed does
   // not use.
   'node_modules/next/dist/compiled/amphtml-validator',
+  // CRITICAL: better-sqlite3 is a native module. The build machine's prebuild
+  // binary (Linux x64 on the CI runner) gets baked into the standalone bundle
+  // by Next, then dlopen fails on every macOS / Windows user. Prune it here
+  // so node's require resolution falls through to the top-level
+  // node_modules/better-sqlite3, which npm installs with the correct prebuild
+  // for the user's actual platform. The `bindings` helper also lives at the
+  // top level and resolves correctly.
+  'node_modules/better-sqlite3',
 ];
 for (const rel of prunePaths) {
   const abs = join(standalone, rel);

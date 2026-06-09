@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] — 2026-06-09
+
+### Fixed
+- **`npx agentgraphed` failed to start on macOS and Windows.** The CI runner is Linux, so `npm run build` left a Linux x64 `better-sqlite3` binary inside `.next/standalone/node_modules/better-sqlite3/`. On install, npm fetches the correct platform prebuild at the top level, but Node's standalone-bundle require resolution found the Linux binary first and dlopened it — failing with `slice is not valid mach-o file` on Apple Silicon (and the equivalent on Windows). Versions 0.1.0 through 0.3.1 were all affected. The post-build script now prunes `node_modules/better-sqlite3` from the standalone bundle so require falls through to the platform-correct copy installed alongside the package. Reproduced and verified on a clean install.
+
 ## [0.3.1] — 2026-06-09
 
 ### Fixed
