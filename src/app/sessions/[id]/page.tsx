@@ -6,7 +6,8 @@ import { CategoryBadge } from '@/components/CategoryBadge';
 import { SessionActions } from '@/components/SessionActions';
 import { ResumePanel } from '@/components/ResumePanel';
 import { ShareButton } from '@/components/ShareButton';
-import { getSession, getSessionMessages, sessionCategories, getSessionModelMix } from '@/lib/queries';
+import { TokenBreakdownCard } from '@/components/TokenBreakdownCard';
+import { getSession, getSessionMessages, sessionCategories, getSessionModelMix, getSessionTokenBreakdown } from '@/lib/queries';
 import { fmtCost, fmtDuration, fmtTokens, fmtClock } from '@/lib/format';
 import { displayTitle } from '@/lib/sessionDisplay';
 import { displayPath } from '@/lib/display-path';
@@ -21,6 +22,7 @@ export default async function SessionDetail({ params }: { params: Promise<{ id: 
   if (!session) notFound();
   const messages = getSessionMessages(id);
   const modelMix = getSessionModelMix(id);
+  const tokenBreakdown = getSessionTokenBreakdown(id);
 
   const title = displayTitle(session);
   const tokens =
@@ -66,6 +68,8 @@ export default async function SessionDetail({ params }: { params: Promise<{ id: 
           <MetricCard label="Cache Read" value={fmtTokens(session.cache_read_tokens)} />
           <MetricCard label="Est. Cost" value={fmtCost(session.est_cost_usd)} accent="secondary" />
         </div>
+
+        <TokenBreakdownCard rows={tokenBreakdown} />
 
         <div className="card">
           <div className="card-header flex items-center justify-between">

@@ -244,6 +244,32 @@ export function getSession(id: string): SessionRow | null {
   );
 }
 
+// Per-session content-source breakdown. Aggregates rows from the tool_io
+// table into the buckets the session-detail card renders: tool result text
+// (the big input contributor), tool call arguments (output), Claude's text
+// replies (output), and user prompts (input). Returns [] if the session
+// pre-dates the v4 schema and was never re-ingested with breakdown data.
+export type SessionTokenBreakdownRow = {
+  kind: 'user_text' | 'assistant_text' | 'tool_use' | 'tool_result';
+  source: string | null;
+  bytes: number;
+  est_tokens: number;
+  items: number;
+};
+export function getSessionTokenBreakdown(sessionId: string): SessionTokenBreakdownRow[] {
+  return getSqlite()
+    .prepare(
+      `SELECT kind, source,
+              SUM(bytes) AS bytes,
+              SUM(est_tokens) AS est_tokens,
+              COUNT(*) AS items
+       FROM tool_io WHERE session_id = ?
+       GROUP BY kind, source
+       ORDER BY est_tokens DESC`,
+    )
+    .all(sessionId) as SessionTokenBreakdownRow[];
+}
+
 // Per-session assistant-message counts by model family. Useful when Claude
 // Code or Codex bounces between models mid-session (e.g. sub-agents) — surfaces
 // otherwise-invisible model mix. Returns [] if every message used the same

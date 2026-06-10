@@ -128,6 +128,36 @@ function ensureSchema(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS claude_limit_events_observed_idx ON claude_limit_events(observed_at);
     CREATE INDEX IF NOT EXISTS claude_limit_events_session_idx ON claude_limit_events(session_id);
+
+    -- Per-content-item attribution of where bytes (and therefore est. tokens)
+    -- came from inside each assistant or tool_result turn. Lets us answer
+    -- "where did my context budget actually go" by source category:
+    --
+    --   kind = 'assistant_text'     -- Claude's text reply  (output)
+    --   kind = 'tool_use'           -- Claude calling a tool (output)
+    --   kind = 'tool_result'        -- Tool response coming back (input next turn)
+    --   kind = 'user_text'          -- User prompt (input)
+    --
+    --   source = tool name when applicable (e.g. 'Bash', 'Read', 'mcp__foo__bar');
+    --           NULL for assistant_text / user_text.
+    --
+    -- bytes is the literal UTF-8 character count of the item's text payload;
+    -- est_tokens is the rough Math.ceil(bytes / 4) tokenization estimate. Both
+    -- are useful — bytes is exact, est_tokens is what the UI compares against
+    -- Claude's billed token count.
+    CREATE TABLE IF NOT EXISTS tool_io (
+      message_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      idx INTEGER NOT NULL,        -- order within the message's content array
+      kind TEXT NOT NULL,
+      source TEXT,                 -- tool name for tool_use / tool_result
+      bytes INTEGER NOT NULL,
+      est_tokens INTEGER NOT NULL,
+      PRIMARY KEY (message_id, idx)
+    );
+    CREATE INDEX IF NOT EXISTS tool_io_session_idx ON tool_io(session_id);
+    CREATE INDEX IF NOT EXISTS tool_io_kind_idx ON tool_io(kind);
+    CREATE INDEX IF NOT EXISTS tool_io_source_idx ON tool_io(source);
   `);
 
   // Lightweight migrations for existing DBs from earlier versions.
@@ -165,15 +195,17 @@ function ensureSchema(db: Database.Database) {
   // re-ingest just refreshes the per-message token columns we just added.
   // Bump this when message ingestion semantics change so existing rows get
   // rebuilt on next boot from the source JSONLs. v2 added per-message token
-  // columns; v3 fixes the multi-file Claude session collision where subagent
-  // files were wiping the parent transcript's messages.
-  const SCHEMA_VERSION = '3';
+  // columns; v3 fixed the multi-file Claude session collision where subagent
+  // files were wiping the parent transcript's messages; v4 adds the tool_io
+  // breakdown (per-content-item attribution of where tokens came from).
+  const SCHEMA_VERSION = '4';
   const prev = db.prepare('SELECT value FROM settings WHERE key = ?').get('schema_version') as
     | { value: string }
     | undefined;
   if (prev?.value !== SCHEMA_VERSION) {
     db.exec('DELETE FROM ingest_state');
     db.exec('DELETE FROM messages');
+    db.exec('DELETE FROM tool_io');
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
       'schema_version',
       SCHEMA_VERSION,

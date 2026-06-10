@@ -7,6 +7,7 @@ import { getSqlite } from '../db/client';
 import { resolveProject, upsertProject } from '../projects';
 import { estimateCost } from '../pricing';
 import { getSetting } from '../queries';
+import { extractToolIo, type ToolIo } from './contentBreakdown';
 
 function walkJsonl(dir: string, out: string[]) {
   let entries;
@@ -187,6 +188,37 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
     est_cost_usd: number;
   }> = [];
 
+  // Per-content-item breakdown ("where did this turn's bytes come from?").
+  // Buffered per file and flushed in one transaction at the end alongside
+  // messages — same idempotency story.
+  const toolIoBatch: Array<{
+    message_id: string;
+    idx: number;
+    item: ToolIo;
+  }> = [];
+  // tool_result items only carry the tool_use_id pointing back at the
+  // earlier assistant turn's tool_use. We resolve to the tool name in a
+  // single pass at the end so the UI doesn't need a join.
+  const toolNameByUseId = new Map<string, string>();
+  // We also need to know which tool_use items had IDs so we can write the
+  // raw id into source during parsing, and rewrite it on flush.
+  const collectToolIo = (messageId: string, role: string | undefined, content: unknown, rawItems: unknown) => {
+    const items = extractToolIo(role, content);
+    // The parser doesn't see Claude's per-item `id` field; pluck it here so
+    // we can populate toolNameByUseId. tool_use items carry `id` + `name`.
+    if (Array.isArray(rawItems)) {
+      for (const c of rawItems) {
+        if (c && typeof c === 'object') {
+          const o = c as { type?: string; id?: string; name?: string };
+          if (o.type === 'tool_use' && typeof o.id === 'string' && typeof o.name === 'string') {
+            toolNameByUseId.set(o.id, o.name);
+          }
+        }
+      }
+    }
+    items.forEach((item, i) => toolIoBatch.push({ message_id: messageId, idx: i, item }));
+  };
+
   for await (const raw of rl) {
     if (!raw.trim()) continue;
     let line: ClaudeLine;
@@ -221,11 +253,21 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
 
     if (line.type === 'user' && line.message?.role === 'user') {
       const text = flattenContent(line.message.content);
+      // User-side messages are either real prompts OR tool_result echoes
+      // (which we still want to count toward tool_result tokens). We persist
+      // the message row only for the prompt path, but the breakdown gets
+      // collected either way.
+      const isToolResultEcho =
+        Array.isArray(line.message.content) &&
+        line.message.content.some(
+          (c) => c && typeof c === 'object' && (c as { type?: string }).type === 'tool_result',
+        );
+      const msgId = line.uuid || randomUUID();
       if (text && !text.startsWith('<environment_context>') && !text.startsWith('<command-')) {
         if (!firstPrompt) firstPrompt = text.slice(0, 500);
         userMessageCount += 1;
         messages.push({
-          id: line.uuid || randomUUID(),
+          id: msgId,
           role: 'user',
           content: text,
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
@@ -237,6 +279,11 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
           est_cost_usd: 0,
         });
         messageCount += 1;
+      }
+      // Always collect breakdown so tool_results contribute even when no
+      // message row gets persisted for the user line.
+      if (isToolResultEcho || text) {
+        collectToolIo(msgId, 'user', line.message.content, line.message.content);
       }
     } else if (line.type === 'assistant' && line.message) {
       if (line.message.model) lastModel = line.message.model;
@@ -252,6 +299,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
         cacheWrite += msgCacheW;
       }
       const text = flattenContent(line.message.content);
+      const msgId = line.uuid || randomUUID();
       if (text) {
         const msgCost = estimateCost({
           model: line.message.model || lastModel,
@@ -261,7 +309,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
           cacheWriteTokens: msgCacheW,
         });
         messages.push({
-          id: line.uuid || randomUUID(),
+          id: msgId,
           role: 'assistant',
           content: text.slice(0, 4000),
           timestamp: Number.isNaN(ts) ? Date.now() : ts,
@@ -274,6 +322,10 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
         });
         messageCount += 1;
       }
+      // Capture breakdown even when there's no surfaced text — assistant
+      // turns that consist of just a tool_use still contribute to the
+      // session's output bytes.
+      collectToolIo(msgId, 'assistant', line.message.content, line.message.content);
     }
   }
 
@@ -364,6 +416,37 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
     }
   });
   tx(messages);
+
+  // Persist the content-item breakdown. Keyed on (message_id, idx) so
+  // subagent files for the same session accumulate alongside the parent
+  // transcript's rows — same lesson as the v3 messages fix. ON CONFLICT
+  // refreshes bytes / est_tokens / source so a re-ingest can correct any
+  // earlier scan where the tool_use_id → name map was incomplete.
+  if (toolIoBatch.length > 0) {
+    const insertToolIo = db.prepare(
+      `INSERT INTO tool_io (
+         message_id, session_id, idx, kind, source, bytes, est_tokens
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(message_id, idx) DO UPDATE SET
+         kind = excluded.kind,
+         source = excluded.source,
+         bytes = excluded.bytes,
+         est_tokens = excluded.est_tokens`,
+    );
+    const ioTx = db.transaction(() => {
+      for (const row of toolIoBatch) {
+        let source = row.item.source;
+        if (row.item.kind === 'tool_result' && source && toolNameByUseId.has(source)) {
+          source = toolNameByUseId.get(source)!;
+        }
+        insertToolIo.run(
+          row.message_id, sessionId, row.idx, row.item.kind, source,
+          row.item.bytes, row.item.est_tokens,
+        );
+      }
+    });
+    ioTx();
+  }
 
   // Persist any limit-reached events from this session. Wipe-and-rewrite per
   // session keeps it idempotent on re-ingest without needing a composite key.
