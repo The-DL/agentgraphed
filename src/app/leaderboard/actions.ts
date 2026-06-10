@@ -109,11 +109,18 @@ async function submitNow(handle: string, socialLinks: string[]): Promise<{ ok: b
   }
 }
 
-// Change the handle the user submits under. Doesn't touch the old handle's
-// rows on the server — those just stop being updated. The user can run the
-// `my-data DELETE` curl from the privacy section if they want them gone.
-// We immediately submit under the new handle so the leaderboard reflects
-// the rename without waiting for the 6h cadence.
+// Change the handle the user submits under. Calls the server's
+// /api/leaderboard/rename endpoint, which UPDATEs every row owned by the
+// old handle to the new handle in a single transaction. This avoids the
+// "now I'm on the leaderboard twice" bug that the previous local-only
+// rename + resubmit approach produced.
+//
+// We only mutate local state after the server has confirmed the rename
+// landed. The collision case (new_handle already taken) bubbles up as a
+// clear error string the UI surfaces inline.
+const RENAME_ENDPOINT = 'https://agentgraphed.com/api/leaderboard/rename';
+const RENAME_TIMEOUT_MS = 8_000;
+
 export async function renameLeaderboardHandleAction(opts: {
   newHandle: string;
 }): Promise<Result> {
@@ -126,27 +133,52 @@ export async function renameLeaderboardHandleAction(opts: {
       return { ok: false, error: 'Not opted in — pick a handle from the Join button instead.' };
     }
     const old = getSetting('leaderboard_handle') ?? '';
+    if (!old) {
+      return { ok: false, error: 'No existing handle to rename from.' };
+    }
     if (old === trimmed) {
+      // Already there — keep the same local state, no server round-trip.
       return { ok: true, submitted: false };
     }
-    setSetting('leaderboard_handle', trimmed);
 
-    // Re-submit under the new handle. Read current social_links straight
-    // from the setting; we don't accept new ones here — that's what the
-    // "Save links" button on the opt-in component is for.
-    const socialLinks = (getSetting('leaderboard_social_links') ?? '')
-      .split('\n').map((s) => s.trim()).filter(Boolean);
-    const submitted = await submitNow(trimmed, socialLinks).catch(() => null);
-    if (submitted && submitted.ok) {
-      setSetting('leaderboard_last_submitted_ms', String(Date.now()));
+    // Server round-trip first. Only commit to the local setting if the
+    // rename actually succeeded — otherwise the user would end up with a
+    // local handle that doesn't match any server row.
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), RENAME_TIMEOUT_MS);
+    let resp: Response;
+    try {
+      resp = await fetch(RENAME_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ old_handle: old, new_handle: trimmed }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      return { ok: false, error: `Couldn't reach the leaderboard server: ${(e as Error).message}` };
+    } finally {
+      clearTimeout(timeout);
     }
+    let bodyJson: { ok?: boolean; error?: string; reason?: string; no_op?: boolean } = {};
+    try {
+      bodyJson = (await resp.json()) as typeof bodyJson;
+    } catch {
+      // ignore — leave bodyJson empty
+    }
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: bodyJson.error ?? `Rename failed (HTTP ${resp.status}).`,
+      };
+    }
+
+    // 404 not_found is a server "ok: false" but we can recover by treating
+    // it as a fresh first-time submission — the user had a local handle
+    // setting but never actually submitted under it. Above this point any
+    // resp.ok=false already returned, so here we're definitely ok.
+    setSetting('leaderboard_handle', trimmed);
     revalidatePath('/leaderboard');
-    return {
-      ok: true,
-      submitted: !!submitted?.ok,
-      serverStatus: submitted?.status,
-      rowsWritten: submitted?.rowsWritten,
-    };
+    return { ok: true, submitted: !bodyJson.no_op };
   } catch (e) {
     return { ok: false, error: (e as Error).message || 'Unknown error' };
   }
