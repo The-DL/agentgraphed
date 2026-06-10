@@ -113,22 +113,37 @@ jobs:
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # Wait for the version we just published to be readable from the npm
-      # registry. CDN propagation is usually instant, but give it up to ~60s
-      # before declaring a failure.
-      - name: Wait for npm registry to serve the new version
+      # Wait for the version we just published to be SERVABLE from the npm
+      # CDN. There are two separate things that have to propagate:
+      #
+      #   1. The package metadata (the JSON at /agentgraphed). Usually
+      #      instant via `npm view`.
+      #   2. The tarball at /agentgraphed/-/agentgraphed-X.Y.Z.tgz. This
+      #      lives behind Cloudflare and can lag the metadata by 30s-2min
+      #      on a busy day. `npm install` needs THIS to succeed.
+      #
+      # The previous version of this step only checked (1), so jobs would
+      # green-light the "registry is serving the new version" check and
+      # then immediately 404 in `npm install`. Now we poll the actual
+      # tarball URL — same one `npm install` will fetch — until it's a
+      # 200, with a 3-minute budget.
+      - name: Wait for npm CDN to serve the tarball
         shell: bash
         run: |
           set -e
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if npm view "agentgraphed@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
-              echo "npm is serving agentgraphed@${{ steps.ver.outputs.version }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          TARBALL_URL="https://registry.npmjs.org/agentgraphed/-/agentgraphed-${VERSION}.tgz"
+          echo "Polling $TARBALL_URL"
+          for i in $(seq 1 36); do
+            CODE=$(curl -sI -o /dev/null -w "%{http_code}" "$TARBALL_URL" || echo "000")
+            if [ "$CODE" = "200" ]; then
+              echo "Tarball is live (HTTP 200) after $((i * 5))s"
               exit 0
             fi
-            echo "Not visible yet, retrying in 5s..."
+            echo "  attempt $i: HTTP $CODE — sleeping 5s"
             sleep 5
           done
-          echo "Timed out waiting for the registry to serve the new version" >&2
+          echo "::error::Tarball still not reachable after 3 minutes"
           exit 1
 
       # Install + boot from the registry (not a local tarball). This is the
