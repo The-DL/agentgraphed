@@ -17,8 +17,15 @@ export function Sidebar() {
   return (
     <aside className="w-56 shrink-0 border-r border-surface-2 bg-surface-0 flex flex-col sticky top-0 h-screen self-start">
       <div className="px-5 border-b border-surface-2 h-[72px] flex flex-col justify-center">
-        <div className="flex items-baseline gap-1.5 leading-none">
-          <span className="text-primary text-base">◧</span>
+        <div className="flex items-center gap-2 leading-none">
+          {/* Cyan bar mark — same visual identity used in the share-image
+              brand block, sized to roughly match the wordmark's cap height so
+              the two read as one unit instead of two stacked objects. */}
+          <span
+            aria-hidden
+            className="inline-block bg-primary rounded-[2px]"
+            style={{ width: 4, height: 16 }}
+          />
           <span className="text-lg font-bold tracking-tight">
             <span className="text-ink-dim">Agent</span>
             <span className="text-primary">Graphed</span>
