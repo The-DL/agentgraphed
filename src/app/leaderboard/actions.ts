@@ -1,13 +1,15 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { setSetting, getRangeSummary, getModelBreakdown } from '@/lib/queries';
+import { setSetting, getSessionsForLeaderboard } from '@/lib/queries';
 
 const SUBMIT_ENDPOINT = 'https://agentgraphed.com/api/leaderboard/submit';
-const SUBMIT_TIMEOUT_MS = 5_000;
+const SUBMIT_TIMEOUT_MS = 8_000;
+const SCHEMA_VERSION = 2;
+const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Result =
-  | { ok: true; submitted: boolean; serverStatus?: number }
+  | { ok: true; submitted: boolean; serverStatus?: number; rowsWritten?: number }
   | { ok: false; error: string };
 
 export async function setLeaderboardOptInAction(opts: {
@@ -19,14 +21,19 @@ export async function setLeaderboardOptInAction(opts: {
     if (opts.optIn) {
       setSetting('leaderboard_handle', opts.handle);
       // Best-effort immediate submission so the user sees their entry land
-      // (or sees an error early). Server-side de-dupes by (handle, week_iso)
-      // so re-runs in the same week just refresh the values.
+      // (or sees an error early). Server-side de-dupes by (handle, session_uuid)
+      // so re-runs just refresh values.
       const submitted = await submitNow(opts.handle).catch(() => null);
       if (submitted && submitted.ok) {
         setSetting('leaderboard_last_submitted_ms', String(Date.now()));
       }
       revalidatePath('/leaderboard');
-      return { ok: true, submitted: !!submitted?.ok, serverStatus: submitted?.status };
+      return {
+        ok: true,
+        submitted: !!submitted?.ok,
+        serverStatus: submitted?.status,
+        rowsWritten: submitted?.rowsWritten,
+      };
     }
     // Opting out — we deliberately KEEP the handle so users can opt back in
     // without retyping. We DO NOT keep an "active subscription" flag; the
@@ -38,25 +45,31 @@ export async function setLeaderboardOptInAction(opts: {
   }
 }
 
-async function submitNow(handle: string): Promise<{ ok: boolean; status: number } | null> {
-  const week = getRangeSummary(7);
-  const modelMix = getModelBreakdown(7).reduce<Record<string, number>>((acc, row) => {
-    acc[row.model] = (acc[row.model] || 0) + row.tokens;
-    return acc;
-  }, {});
+async function submitNow(handle: string): Promise<{ ok: boolean; status: number; rowsWritten?: number } | null> {
+  const since = Math.max(0, Date.now() - LOOKBACK_MS);
+  const sessions = getSessionsForLeaderboard(since);
+  // If the user has no recent sessions, we still want to mark them as
+  // submitting — but there's nothing to send yet. Treat as "success, 0 rows".
+  if (sessions.length === 0) return { ok: true, status: 204, rowsWritten: 0 };
+
   const payload = {
     handle,
-    week_iso: weekIsoString(),
-    tokens: week.tokens,
-    sessions: week.sessions,
-    projects: week.projects,
-    est_cost_usd: Math.round(week.cost * 100) / 100,
-    active_days: week.active_months,
-    model_mix: Object.fromEntries(
-      Object.entries(modelMix).slice(0, 5).map(([m, t]) => [m, t]),
-    ),
-    schema_version: 1,
+    schema_version: SCHEMA_VERSION,
+    sessions: sessions.map((s) => ({
+      session_uuid: s.session_uuid,
+      started_at: new Date(s.started_at).toISOString(),
+      duration_ms: s.duration_ms,
+      provider: s.provider,
+      model: s.model,
+      input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens,
+      cache_read_tokens: s.cache_read_tokens,
+      cache_write_tokens: s.cache_write_tokens,
+      est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
+      message_count: s.message_count,
+    })),
   };
+
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), SUBMIT_TIMEOUT_MS);
   try {
@@ -66,23 +79,17 @@ async function submitNow(handle: string): Promise<{ ok: boolean; status: number 
       body: JSON.stringify(payload),
       signal: ctrl.signal,
     });
-    // We intentionally don't await resp.text() — the endpoint acks with
-    // a 200 and we don't need the body. Failure (non-2xx, timeout, network
-    // error) leaves the last_submitted_ms timestamp untouched so the
-    // periodic submitter in auto.ts retries on the next ingest tick.
-    return { ok: resp.ok, status: resp.status };
+    let rowsWritten: number | undefined;
+    try {
+      const body = (await resp.json()) as { rows_written?: number };
+      rowsWritten = body?.rows_written;
+    } catch {
+      // ignore — server might not have responded with JSON
+    }
+    return { ok: resp.ok, status: resp.status, rowsWritten };
   } catch {
     return null;
   } finally {
     clearTimeout(timeout);
   }
-}
-
-function weekIsoString(): string {
-  const d = new Date();
-  const tmp = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  tmp.setDate(tmp.getDate() + 4 - (tmp.getDay() || 7));
-  const yearStart = new Date(tmp.getFullYear(), 0, 1);
-  const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
-  return `${tmp.getFullYear()}-W${String(week).padStart(2, '0')}`;
 }

@@ -105,9 +105,27 @@ agentgraphed
 
 ## Privacy
 
-- Everything lives in `~/.agentgraphed/agentgraphed.sqlite` on your machine.
-- Nothing is uploaded unless **you** click "Copy context" or "Classify sessions," and even then only to *your* LLM provider with *your* API key.
-- API keys are stored in plaintext in the SQLite file — same threat model as `~/.aws/credentials` or a `.env`. Don't commit your home folder to git.
+AgentGraphed is **local-first by default**. Everything lives in `~/.agentgraphed/agentgraphed.sqlite` on your machine.
+
+There are exactly three things that can ever leave your computer, and every one of them is opt-in:
+
+1. **LLM session classification + "Summarize for new chat"** — only fires when you click the button or enable auto-classify. Sends a sampled set of your own prompts to *your* configured LLM provider with *your* API key. Nothing reaches AgentGraphed servers.
+
+2. **The opt-in leaderboard.** Off by default. When you turn it on, every six hours (or sooner if you finished a new session since the last submit) your local app posts a batch of *session-level* rows to `https://agentgraphed.com/api/leaderboard/submit`. Each row contains: the handle you picked, a random per-session UUID, start time, duration, provider, model, tokens by kind (input/output/cache_read/cache_write), est. cost, and message count. **No prompts, no project names, no session content, no file paths, no git branches, no API keys.** Full breakdown of what is and isn't sent: <https://agentgraphed.com/privacy>.
+
+3. **API keys** are stored in plaintext in your local SQLite file — same threat model as `~/.aws/credentials` or a `.env`. Don't commit your home folder to git.
+
+**To verify any of this, read the source.** The leaderboard submitter is one function (`maybeSubmitLeaderboard`) in [`src/lib/ingest/auto.ts`](./src/lib/ingest/auto.ts). The wire format is one schema — what's not in the schema isn't sent.
+
+**To audit or delete your leaderboard data:**
+
+```bash
+# See everything we have for your handle
+curl "https://agentgraphed.com/api/leaderboard/my-data?handle=YOUR_HANDLE"
+
+# Delete it all
+curl -X DELETE "https://agentgraphed.com/api/leaderboard/my-data?handle=YOUR_HANDLE"
+```
 
 ## Supported sources
 

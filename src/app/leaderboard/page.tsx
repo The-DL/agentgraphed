@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/PageHeader';
 import { LeaderboardOptIn } from '@/components/LeaderboardOptIn';
-import { getRangeSummary, getModelBreakdown, getSetting } from '@/lib/queries';
+import { getSetting, getSessionsForLeaderboard, getRangeSummary } from '@/lib/queries';
 import { fmtCost, fmtTokens } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -14,30 +14,33 @@ export const dynamic = 'force-dynamic';
 // Honest framing throughout: local-only by default, leaderboard is opt-in,
 // and we show the literal payload that goes over the wire before asking.
 
+const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
 export default async function LeaderboardPage() {
   const optedIn = getSetting('leaderboard_opt_in') === 'on';
   const handle = getSetting('leaderboard_handle') || '';
   const lastSubmittedAt = parseInt(getSetting('leaderboard_last_submitted_ms') || '0', 10);
 
-  // Compute the exact payload we would send for the current 7-day window.
-  // Same shape will be POSTed by the client when opted in.
+  // Compute the exact payload we would send right now. Same shape will be
+  // POSTed by the client when opted in.
+  const sessions = getSessionsForLeaderboard(Date.now() - LOOKBACK_MS);
   const week = getRangeSummary(7);
-  const modelMix = getModelBreakdown(7).reduce<Record<string, number>>((acc, row) => {
-    acc[row.model] = (acc[row.model] || 0) + row.tokens;
-    return acc;
-  }, {});
   const previewPayload = {
-    handle: handle || '<your handle>',
-    week_iso: weekIsoString(),
-    tokens: week.tokens,
-    sessions: week.sessions,
-    projects: week.projects,
-    est_cost_usd: round2(week.cost),
-    active_days: week.active_months, // weekly view borrows the column; sub-30d ranges always report 1
-    model_mix: Object.fromEntries(
-      Object.entries(modelMix).slice(0, 5).map(([m, t]) => [m, t]),
-    ),
-    schema_version: 1,
+    handle: handle || '<your-handle>',
+    schema_version: 2,
+    sessions: sessions.slice(0, 3).map((s) => ({
+      session_uuid: s.session_uuid,
+      started_at: new Date(s.started_at).toISOString(),
+      duration_ms: s.duration_ms,
+      provider: s.provider,
+      model: s.model,
+      input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens,
+      cache_read_tokens: s.cache_read_tokens,
+      cache_write_tokens: s.cache_write_tokens,
+      est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
+      message_count: s.message_count,
+    })),
   };
 
   return (
@@ -48,7 +51,46 @@ export default async function LeaderboardPage() {
       />
 
       <div className="p-7 space-y-6 max-w-3xl">
-        {/* Status block */}
+        {/* What we send — shown FIRST, before opt-in */}
+        <div className="card">
+          <div className="card-header flex items-center justify-between">
+            <span>What we send</span>
+            <span className="normal-case tracking-normal font-normal text-ink-mute text-[11px]">
+              this is the literal payload — nothing else
+            </span>
+          </div>
+          <div className="p-5 space-y-3">
+            <div className="text-body-sm text-ink-mute">
+              Every six hours (or sooner if you finished a new session since the last
+              submit), we&apos;d post one batch of session-level rows. Each row contains
+              only what you see below. <span className="text-ink-dim">No prompts,
+              no project names, no session content, no file paths, no cwd.</span>{' '}
+              <a
+                href="https://agentgraphed.com/privacy"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                Full privacy doc →
+              </a>
+            </div>
+            <div className="text-[11px] text-ink-mute">
+              Preview of your next submission ({sessions.length} session{sessions.length === 1 ? '' : 's'} in the
+              last 7 days; showing first 3):
+            </div>
+            <pre className="bg-canvas border border-surface-3 rounded p-3 text-code-sm font-mono text-ink-dim overflow-x-auto">
+{JSON.stringify(previewPayload, null, 2)}
+            </pre>
+            <div className="text-[11px] text-ink-mute leading-relaxed">
+              <span className="text-ink-dim">Identity</span> is just the handle you choose
+              (anonymous, no email needed). A future release will add an optional GitHub
+              claim so you can rank under your real handle if you want — but anonymous
+              handles will keep working.
+            </div>
+          </div>
+        </div>
+
+        {/* Status / opt-in */}
         <div className="card">
           <div className="card-header flex items-center justify-between">
             <span>Status</span>
@@ -62,7 +104,15 @@ export default async function LeaderboardPage() {
                 <div className="flex items-baseline justify-between">
                   <div>
                     <div className="text-secondary text-body-md font-medium">
-                      Submitting as <span className="font-mono">{handle || '(no handle set)'}</span>
+                      Submitting as{' '}
+                      <a
+                        href={`https://agentgraphed.com/u/${encodeURIComponent(handle)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono hover:underline"
+                      >
+                        {handle || '(no handle set)'}
+                      </a>
                     </div>
                     <div className="text-[11px] text-ink-mute mt-1">
                       {lastSubmittedAt
@@ -81,8 +131,8 @@ export default async function LeaderboardPage() {
                   >
                     agentgraphed.com/leaderboard
                   </a>
-                  . The submitter posts your weekly stats once every 24 hours; if the last
-                  submission timestamp above is recent, your row is up to date.
+                  . The submitter posts session stats roughly every six hours; if the
+                  last submission timestamp above is recent, your profile is up to date.
                 </div>
                 <LeaderboardOptIn initialOptIn={optedIn} initialHandle={handle} />
               </div>
@@ -90,12 +140,12 @@ export default async function LeaderboardPage() {
               <div className="space-y-4">
                 <div>
                   <div className="text-body-md text-ink">
-                    Opt in to compare your weekly stats with other AgentGraphed users.
+                    Opt in to share session-level stats with the public leaderboard.
                   </div>
                   <div className="text-body-sm text-ink-mute mt-1">
-                    Local-first by default. Nothing leaves your machine until you flip the
-                    switch. Even then we only send <em>aggregated</em> stats — no prompts,
-                    no project names, no session contents.
+                    Local-first by default. Nothing leaves your machine until you flip
+                    the switch. Even then we only send the fields shown above — never
+                    prompts, project names, or session content.
                   </div>
                 </div>
                 <LeaderboardOptIn initialOptIn={optedIn} initialHandle={handle} />
@@ -104,32 +154,26 @@ export default async function LeaderboardPage() {
           </div>
         </div>
 
-        {/* What we send */}
-        <div className="card">
-          <div className="card-header flex items-center justify-between">
-            <span>What we send</span>
-            <span className="normal-case tracking-normal font-normal text-ink-mute text-[11px]">
-              this is the literal payload — nothing else
-            </span>
-          </div>
-          <div className="p-5 space-y-3">
-            <div className="text-body-sm text-ink-mute">
-              Each week we&apos;d post a single JSON object with the fields below.
-              <span className="text-ink-dim"> Headline numbers only.</span> No prompts,
-              session content, project names, file paths, or cwd. The current payload
-              for <span className="font-mono">{previewPayload.week_iso}</span>:
-            </div>
-            <pre className="bg-canvas border border-surface-3 rounded p-3 text-code-sm font-mono text-ink-dim overflow-x-auto">
-{JSON.stringify(previewPayload, null, 2)}
-            </pre>
-            <div className="text-[11px] text-ink-mute leading-relaxed">
-              <span className="text-ink-dim">Identity</span> is just the handle you choose
-              (anonymous, no email needed). In a later release we&apos;ll add an optional
-              GitHub claim so you can rank under your real handle if you want — but
-              anonymous handles will keep working.
+        {/* Audit / delete */}
+        {handle && (
+          <div className="card">
+            <div className="card-header">Audit or delete your data</div>
+            <div className="p-5 space-y-2 text-body-sm text-ink-mute leading-relaxed">
+              <p>
+                See exactly what the server has for your handle, or delete it. Anyone
+                with your handle can do either (it&apos;s anonymous both ways) — by
+                design.
+              </p>
+              <pre className="bg-canvas border border-surface-3 rounded p-3 text-code-sm font-mono text-ink-dim overflow-x-auto">
+{`# See your data
+curl 'https://agentgraphed.com/api/leaderboard/my-data?handle=${handle}'
+
+# Delete your data
+curl -X DELETE 'https://agentgraphed.com/api/leaderboard/my-data?handle=${handle}'`}
+              </pre>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Headline stats preview */}
         <div className="grid grid-cols-4 gap-4">
@@ -140,9 +184,10 @@ export default async function LeaderboardPage() {
         </div>
 
         <div className="text-[11px] text-ink-mute leading-relaxed border-t border-surface-2 pt-3">
-          The leaderboard endpoint <span className="font-mono">agentgraphed.com/api/leaderboard/submit</span>{' '}
-          accepts the payload above once per week. You can opt out any time — submissions stop
-          immediately. We have no plans to ever publish anything beyond this aggregate view.
+          The leaderboard endpoint{' '}
+          <span className="font-mono">agentgraphed.com/api/leaderboard/submit</span>{' '}
+          accepts the payload above. You can opt out any time — submissions stop
+          immediately. We don&apos;t publish anything beyond this aggregate view.
         </div>
       </div>
     </div>
@@ -160,20 +205,4 @@ function Mini({ label, value, accent }: { label: string; value: string; accent?:
       </div>
     </div>
   );
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-// ISO week string: 2026-W23. Stable identifier so a user's weekly submission
-// for the same window dedupes on the server side.
-function weekIsoString(): string {
-  const d = new Date();
-  // ISO week: Thursday of current week determines the year.
-  const tmp = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  tmp.setDate(tmp.getDate() + 4 - (tmp.getDay() || 7));
-  const yearStart = new Date(tmp.getFullYear(), 0, 1);
-  const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
-  return `${tmp.getFullYear()}-W${String(week).padStart(2, '0')}`;
 }

@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-06-10
+
+### Changed
+- **Leaderboard goes session-level.** Wire format upgraded from `schema_version: 1` (weekly aggregate, one submission/24h) to `schema_version: 2` (batch of session-level rows, every 6h or sooner if there's new activity since the last submit). Each row sends `session_uuid`, `started_at`, `duration_ms`, `provider`, `model`, tokens by kind (input/output/cache_read/cache_write), `est_cost_usd`, and `message_count`. Still no prompts, no project names, no session content — see <https://agentgraphed.com/privacy> for the full list. Server-side de-dupes on `(handle, session_uuid)` so re-sends in the lookback window just refresh totals.
+- **Public ranking page now supports 24h / 7d / 30d time windows** at <https://agentgraphed.com/leaderboard>, with metric switching between cost / tokens / sessions.
+- **Public profile pages** at `agentgraphed.com/u/<handle>` — headline cost/tokens/sessions/time-on-task, by-model rollup, and per-session table. Click any handle on the leaderboard to view its profile.
+- **In-app leaderboard page** shows the literal session-level payload preview *before* the opt-in button, and adds an "Audit or delete your data" section with the curl commands for the `my-data` endpoints.
+
+### Added
+- **Public `/privacy` page** at <https://agentgraphed.com/privacy> — long-form, enumerates every field in the wire format with source-code links to the exact route handlers on GitHub. Read the code yourself rather than trust the prose.
+- **`GET /api/leaderboard/my-data?handle=X`** and **`DELETE /api/leaderboard/my-data?handle=X`** — audit and delete your data. No auth in v1 (handles are pseudonymous).
+
+### Notes
+- Wire-format change but the trust contract is unchanged: opt-in only, headline aggregates only, no content fields. The privacy page is the canonical source of truth for what's in the schema.
+- Clients on 0.4.0 (`schema_version: 1`) continue to be accepted — the server now routes by schema version and writes legacy submissions to the original `submissions` table.
+
 ## [0.4.0] — 2026-06-10
 
 ### Added

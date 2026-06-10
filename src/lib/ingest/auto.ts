@@ -12,7 +12,7 @@
 // COST NOTE: this is all local file IO. No API calls, no tokens, no money.
 
 import { runIngest } from './run';
-import { getSetting, setSetting, getRangeSummary, getModelBreakdown } from '../queries';
+import { getSetting, setSetting, getSessionsForLeaderboard } from '../queries';
 import { clearMemo } from '../cache';
 import { classifyBatch, getUnclassifiedRows } from '../llm/classify';
 import { getLlmConfig } from '../llm/client';
@@ -20,9 +20,16 @@ import { getLlmConfig } from '../llm/client';
 const DEBOUNCE_MS = 10_000;
 const TICK_MS = 5 * 60_000;
 const AUTO_CLASSIFY_THRESHOLD = 5;
-const LEADERBOARD_SUBMIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day max
+// Leaderboard: send at most every 6 hours, but a fresh ingest with new
+// session activity bypasses the cooldown so the leaderboard stays lively.
+const LEADERBOARD_SUBMIT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const LEADERBOARD_ENDPOINT = 'https://agentgraphed.com/api/leaderboard/submit';
-const LEADERBOARD_TIMEOUT_MS = 5_000;
+const LEADERBOARD_TIMEOUT_MS = 8_000;
+const LEADERBOARD_SCHEMA_VERSION = 2;
+// Look back this far when picking sessions to include in a submission.
+// Sessions whose data updated within the window get re-sent (cheap; the
+// server UPSERTs on session_uuid).
+const LEADERBOARD_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 let inFlight: Promise<void> | null = null;
 
 // Boot a single global setInterval that keeps re-triggering the ingest even
@@ -97,36 +104,56 @@ async function maybeAutoClassify(): Promise<void> {
   }
 }
 
-// If the user opted into the leaderboard, post their weekly aggregates to
-// the public endpoint at most once every 24 hours. Best-effort: a 5s
-// network timeout, errors swallowed, failure leaves the last_submitted_ms
-// timestamp untouched so we retry on the next ingest tick.
+// If the user opted into the leaderboard, post a batch of session-level
+// rows to the public endpoint. Cadence: at most every 6 hours, OR sooner
+// if the just-finished ingest produced new session activity since the
+// last submit. Best-effort: short network timeout, errors swallowed,
+// failure leaves the last-submitted timestamp untouched so we retry on
+// the next ingest tick. The server UPSERTs on (handle, session_uuid)
+// so re-sending the same session within the lookback window is cheap
+// and the latest values win.
 async function maybeSubmitLeaderboard(): Promise<void> {
   try {
     if (getSetting('leaderboard_opt_in') !== 'on') return;
     const handle = getSetting('leaderboard_handle');
     if (!handle) return;
+
     const lastRaw = getSetting('leaderboard_last_submitted_ms');
     const lastMs = lastRaw ? parseInt(lastRaw, 10) : 0;
-    if (Date.now() - lastMs < LEADERBOARD_SUBMIT_INTERVAL_MS) return;
 
-    const week = getRangeSummary(7);
-    const modelMix = getModelBreakdown(7).reduce<Record<string, number>>((acc, row) => {
-      acc[row.model] = (acc[row.model] || 0) + row.tokens;
-      return acc;
-    }, {});
+    // Build the batch: every session that ended within the lookback window.
+    // The server UPSERTs by session_uuid, so previously-sent sessions just
+    // get their totals refreshed (cheap, idempotent).
+    const since = Math.max(0, Date.now() - LEADERBOARD_LOOKBACK_MS);
+    const sessions = getSessionsForLeaderboard(since);
+    if (sessions.length === 0) return;
+
+    // Cadence gate: skip if cooldown not elapsed AND no session has ended
+    // since the last submit. (i.e., only push early if there's new data.)
+    const cooldownActive = Date.now() - lastMs < LEADERBOARD_SUBMIT_INTERVAL_MS;
+    if (cooldownActive) {
+      const hasNewActivity = sessions.some(
+        (s) => s.started_at + s.duration_ms > lastMs,
+      );
+      if (!hasNewActivity) return;
+    }
+
     const payload = {
       handle,
-      week_iso: weekIsoString(),
-      tokens: week.tokens,
-      sessions: week.sessions,
-      projects: week.projects,
-      est_cost_usd: Math.round(week.cost * 100) / 100,
-      active_days: week.active_months,
-      model_mix: Object.fromEntries(
-        Object.entries(modelMix).slice(0, 5).map(([m, t]) => [m, t]),
-      ),
-      schema_version: 1,
+      schema_version: LEADERBOARD_SCHEMA_VERSION,
+      sessions: sessions.map((s) => ({
+        session_uuid: s.session_uuid,
+        started_at: new Date(s.started_at).toISOString(),
+        duration_ms: s.duration_ms,
+        provider: s.provider,
+        model: s.model,
+        input_tokens: s.input_tokens,
+        output_tokens: s.output_tokens,
+        cache_read_tokens: s.cache_read_tokens,
+        cache_write_tokens: s.cache_write_tokens,
+        est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
+        message_count: s.message_count,
+      })),
     };
 
     const ctrl = new AbortController();
@@ -145,15 +172,6 @@ async function maybeSubmitLeaderboard(): Promise<void> {
   } catch {
     // Best-effort; never block the user.
   }
-}
-
-function weekIsoString(): string {
-  const d = new Date();
-  const tmp = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  tmp.setDate(tmp.getDate() + 4 - (tmp.getDay() || 7));
-  const yearStart = new Date(tmp.getFullYear(), 0, 1);
-  const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
-  return `${tmp.getFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
 // For pages that want to know how stale the data might be (e.g. for a small

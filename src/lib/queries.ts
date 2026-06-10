@@ -743,6 +743,40 @@ export function getSessionModelMix(sessionId: string): { family: string; message
     .sort((a, b) => b.messages - a.messages);
 }
 
+// Leaderboard-specific: pull just the columns the v2 leaderboard wire
+// format wants, for sessions that ended after the given timestamp.
+// Returns nothing that isn't already in the privacy doc — explicitly
+// no project info, no first_prompt, no titles, no content fields.
+//
+// We key on `ended_at` (not `started_at`) so re-sends naturally cover
+// sessions that span the cutoff (a session that started before the cutoff
+// but is still active just keeps appearing in subsequent batches as its
+// totals update — UPSERT on (handle, session_uuid) refreshes them).
+export type LeaderboardSessionRow = {
+  session_uuid: string;
+  started_at: number;
+  duration_ms: number;
+  provider: string;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  est_cost_usd: number;
+  message_count: number;
+};
+
+export function getSessionsForLeaderboard(sinceMs: number): LeaderboardSessionRow[] {
+  return getSqlite()
+    .prepare(
+      `SELECT id AS session_uuid, started_at, duration_ms, provider, model,
+              input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+              est_cost_usd, message_count
+       FROM sessions WHERE ended_at >= ? ORDER BY started_at ASC LIMIT 500`,
+    )
+    .all(sinceMs) as LeaderboardSessionRow[];
+}
+
 export function getSessionMessages(sessionId: string) {
   return getSqlite()
     .prepare(
