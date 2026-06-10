@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { fmtTokens, fmtCost } from '@/lib/format';
 import type { TokenBreakdownSummary, TokenBreakdownRow } from '@/lib/queries';
 import { ShareButton } from './ShareButton';
+import { Tooltip } from './Tooltip';
 
 // Full "where your cost went" view for the Analytics page. Same data as
 // the dashboard chart toggle but expanded:
@@ -131,7 +132,13 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
               dollars={summary.input_cost_usd}
               dollarPct={inDollarPct}
               tokens={summary.input_tokens}
-              tooltip="Your new prompts + uncached context, charged at the full input rate."
+              tip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">Fresh input</strong> is content Claude saw <em>for the first time</em> — your new prompts, plus any context that wasn&apos;t already in Anthropic&apos;s prompt cache.</p>
+                  <p className="mb-2">Billed at the <strong>full input rate</strong>, the most expensive way to feed in context.</p>
+                  <p>This is the lever you can move. It grows when context can&apos;t be cached — new system prompts, model swaps, very fresh tool results. A low share here means you&apos;re benefiting from prompt caching.</p>
+                </>
+              }
             />
             <DollarStat
               color="#ffaa3a"
@@ -139,7 +146,13 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
               dollars={summary.cache_write_cost_usd}
               dollarPct={cwDollarPct}
               tokens={summary.cache_write_tokens}
-              tooltip="Content being written into Anthropic's prompt cache (~1.25× input rate). Pays back when subsequent turns re-read the same content."
+              tip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">Cache writes</strong> are tokens Anthropic is <em>storing</em> in the prompt cache so future turns can re-use them cheaply.</p>
+                  <p className="mb-2">Billed at <strong>~1.25× the fresh input rate</strong> — a small premium for the storage. Pays back the first time a subsequent turn re-reads the same content.</p>
+                  <p>You&apos;ll see a small share here whenever long-lived context first enters cache.</p>
+                </>
+              }
             />
             <DollarStat
               color="#5cd0ff"
@@ -147,7 +160,14 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
               dollars={summary.cache_read_cost_usd}
               dollarPct={crDollarPct}
               tokens={summary.cache_read_tokens}
-              tooltip="Conversation context already in cache, re-billed every turn at the ~10% rate. This is usually big on long Claude Code sessions — it's the cheap regime, not a problem."
+              tip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">Replayed context</strong> is conversation history already in Anthropic&apos;s prompt cache, being re-charged on every subsequent turn.</p>
+                  <p className="mb-2">Billed at <strong>~10% of the fresh input rate</strong> — the cheap regime.</p>
+                  <p className="mb-2"><strong>Why this usually dominates:</strong> Anthropic re-bills the full conversation context every turn. Cache reads are 10× cheaper per token but they stack up across long sessions. A 90%+ share here is <em>good</em> — without prompt caching, you&apos;d be paying roughly 10× this number at the fresh-input rate.</p>
+                  <p>The lever to reduce it: shorter sessions with less accumulated context. The lever to <em>improve</em> it: stable system prompts and tool patterns, which let Anthropic keep more of the cache warm.</p>
+                </>
+              }
             />
             <DollarStat
               color="#00ffab"
@@ -155,33 +175,36 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
               dollars={summary.output_cost_usd}
               dollarPct={outDollarPct}
               tokens={summary.output_tokens}
-              tooltip="Claude's text replies + tool calls, charged at the full output rate (highest per-token)."
+              tip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">Output</strong> is everything Claude generated — text replies plus the JSON arguments of every tool call it made.</p>
+                  <p>Billed at the <strong>full output rate</strong>, which is the highest per-token price (typically ~5× input). Low volume but expensive per token; even a small token share here can mean a notable dollar share.</p>
+                </>
+              }
             />
           </div>
-          <p className="mt-3 text-[11px] text-ink-mute leading-relaxed">
-            <strong className="text-ink-dim">Why &ldquo;Replayed context&rdquo; usually dominates:</strong>{' '}
-            Anthropic re-bills the entire conversation context every turn. Cache reads cost
-            ~10% of fresh input, but they stack up across long sessions. A 90%+ replay share
-            here is the <em>cheap</em> regime — you&apos;d be paying ~10× more without prompt
-            caching. The lever you can move is the <span className="text-ink-dim">Fresh input</span> share,
-            which grows when context can&apos;t be cached (new system prompts, model swaps,
-            very fresh tool results).
-          </p>
         </div>
 
         {/* Sources */}
         <div>
-          <div className="text-[11px] text-ink-mute uppercase tracking-wider mb-3">
-            What put content into Claude&apos;s context
-            <span className="ml-2 normal-case tracking-normal font-normal text-ink-mute">
-              (pro-rated cost by source — input-side bytes are re-billed every turn until they age out of cache)
-            </span>
+          <div className="text-[11px] text-ink-mute uppercase tracking-wider mb-3 flex items-center gap-1.5">
+            <span>What put content into Claude&apos;s context</span>
+            <Tooltip width={360}>
+              <p className="mb-2">These rows show <strong>where the bytes Claude saw came from</strong>, with each session&apos;s actual cost split across them by share of unique bytes.</p>
+              <p className="mb-2"><strong className="text-ink">Same dollars as the top bar</strong>, different cross-section: the top bar splits cost by billing kind (fresh / cache write / replayed / output); these rows split the same total by content source.</p>
+              <p>So a row like &ldquo;Read · $7,682&rdquo; means: of all the dollars you paid for content going into Claude&apos;s context, roughly $7,682 worth came from file contents the Read tool put there. We can&apos;t observe which individual bytes hit cache vs fresh — Anthropic only reports the totals per session.</p>
+            </Tooltip>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <SourceList
               title="What Claude read"
               subtitle={`${fmtCost(inCost)} · input-side`}
-              hint="Tool results + your prompts. Bytes here become part of Claude's input context and re-bill on every subsequent turn."
+              headerTip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">What Claude read</strong> = input-side content. Tool results (file contents Read pulled in, Bash output, MCP responses, etc.) plus your own prompts.</p>
+                  <p>Every byte here entered Claude&apos;s input context and was re-billed on every subsequent turn (mostly at the cheap cache-read rate, sometimes at fresh-input rate the first time, sometimes at cache-write rate the first time it got cached).</p>
+                </>
+              }
               rows={inputRows}
               expanded={inputExpanded}
               onToggle={() => setExpandedSide(inputExpanded ? 'none' : (outputExpanded ? 'output' : 'input'))}
@@ -190,7 +213,12 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
             <SourceList
               title="What Claude said"
               subtitle={`${fmtCost(outCost)} · output-side`}
-              hint="Claude's text replies + the JSON arguments of every tool call it made."
+              headerTip={
+                <>
+                  <p className="mb-2"><strong className="text-ink">What Claude said</strong> = output-side content. Claude&apos;s text replies + the JSON arguments of every tool call it made (e.g. the file path and edit string for an Edit call).</p>
+                  <p>Output tokens are billed at the highest per-token rate, so even a small share by volume can be a real share of cost.</p>
+                </>
+              }
               rows={outputRows}
               expanded={outputExpanded}
               onToggle={() => setExpandedSide(outputExpanded ? (inputExpanded ? 'input' : 'none') : (inputExpanded ? 'both' : 'output'))}
@@ -240,20 +268,23 @@ function DollarStat({
   dollars,
   dollarPct,
   tokens,
-  tooltip,
+  tip,
 }: {
   color: string;
   label: string;
   dollars: number;
   dollarPct: number;
   tokens: number;
-  tooltip: string;
+  tip: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2 text-ink-mute" title={tooltip}>
+    <div className="flex items-start gap-2 text-ink-mute">
       <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0 mt-1.5" style={{ backgroundColor: color }} />
       <div className="leading-tight">
-        <div className="text-ink-dim">{label}</div>
+        <div className="text-ink-dim flex items-center gap-1.5">
+          <span>{label}</span>
+          <Tooltip width={340}>{tip}</Tooltip>
+        </div>
         <div className="text-ink">{fmtCost(dollars)} <span className="text-ink-mute">({dollarPct.toFixed(0)}%)</span></div>
         <div className="text-ink-mute text-[10px]">{fmtTokens(tokens)} tokens</div>
       </div>
@@ -262,11 +293,11 @@ function DollarStat({
 }
 
 function SourceList({
-  title, subtitle, hint, rows, expanded, onToggle, accent,
+  title, subtitle, headerTip, rows, expanded, onToggle, accent,
 }: {
   title: string;
   subtitle: string;
-  hint?: string;
+  headerTip?: React.ReactNode;
   rows: TokenBreakdownRow[];
   expanded: boolean;
   onToggle: () => void;
@@ -279,13 +310,13 @@ function SourceList({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-body-md text-ink" title={hint}>{title}</span>
+      <div className="flex items-baseline justify-between mb-3">
+        <span className="text-body-md text-ink flex items-center gap-1.5">
+          {title}
+          {headerTip && <Tooltip width={340}>{headerTip}</Tooltip>}
+        </span>
         <span className="text-[11px] text-ink-mute font-mono normal-case tracking-normal">{subtitle}</span>
       </div>
-      {hint && (
-        <div className="text-[11px] text-ink-mute leading-relaxed mb-3 -mt-1">{hint}</div>
-      )}
       <div className="space-y-2">
         {visible.length === 0 && (
           <div className="text-body-sm text-ink-mute">No data in this group.</div>
@@ -307,20 +338,14 @@ function SourceList({
             + (r.kind === 'tool_use' ? ' · call args' : '');
           const detail = `${r.items} ${r.items === 1 ? 'item' : 'items'} · ${fmtBytes(r.bytes)}`;
           const pct = (r.est_cost_usd / maxCost) * 100;
-          const rowTip =
-            r.kind === 'tool_result'
-              ? `Bytes returned by the ${r.source ?? 'unknown'} tool, fed into Claude's input context. Pro-rated cost across input-side billing buckets (fresh + cache_read + cache_write).`
-              : r.kind === 'tool_use'
-              ? `JSON arguments Claude sent when calling the ${r.source ?? 'unknown'} tool. Billed as output tokens (highest per-token rate).`
-              : r.kind === 'user_text'
-              ? 'Your prompts. Fed into Claude’s input context and re-billed every subsequent turn (mostly at cache rate).'
-              : 'Claude’s text replies. Billed as output tokens.';
+          const rowTip = sourceRowTip(r);
           return (
-            <div key={`${r.kind}|${r.source ?? ''}`} className="space-y-1" title={rowTip}>
+            <div key={`${r.kind}|${r.source ?? ''}`} className="space-y-1">
               <div className="flex items-baseline justify-between text-body-sm">
-                <span className="text-ink-dim truncate pr-2">
-                  {label}
-                  <span className="text-ink-mute font-mono text-[11px] ml-2">{detail}</span>
+                <span className="text-ink-dim truncate pr-2 flex items-center gap-1.5">
+                  <span className="truncate">{label}</span>
+                  <Tooltip width={340}>{rowTip}</Tooltip>
+                  <span className="text-ink-mute font-mono text-[11px] ml-1">{detail}</span>
                 </span>
                 <span className="font-mono text-ink tabular text-code-sm whitespace-nowrap">
                   ≈{fmtCost(r.est_cost_usd)}
@@ -351,4 +376,76 @@ function fmtBytes(n: number): string {
   if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} kB`;
   return `${n} B`;
+}
+
+// Per-row tooltip content. We special-case the popular Claude Code tools
+// so the explanation is concrete ("Read tool = file contents") instead of
+// generic. Falls back to a kind-based explanation otherwise.
+function sourceRowTip(r: TokenBreakdownRow): React.ReactNode {
+  // The most important disambiguation in the whole UI — the Read TOOL is not
+  // the cache_read billing kind. Spell this out every time.
+  if (r.kind === 'tool_result' && r.source === 'Read') {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">Read</strong> here means the <strong>Read tool</strong> — file contents Claude pulled into its context window with <code className="font-mono text-[10px]">Read(file_path=…)</code>.</p>
+        <p className="mb-2">This is <strong>not</strong> the same as &ldquo;cache read&rdquo; in the top bar. That&apos;s a billing rate. This is a content source.</p>
+        <p>The dollar value is a pro-rated estimate of how much of your bill came from file contents staying in Claude&apos;s context across the window — paid at a mix of fresh-input, cache-write, and cache-read rates that we can&apos;t split per byte.</p>
+      </>
+    );
+  }
+  if (r.kind === 'tool_result' && r.source === 'Bash') {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">Bash tool results</strong> = stdout/stderr Claude saw from shell commands it ran.</p>
+        <p>Often surprisingly expensive because command output (logs, build errors, dumps) tends to be verbose and gets re-read every turn until it ages out of cache.</p>
+      </>
+    );
+  }
+  if (r.kind === 'tool_result' && (r.source === 'Edit' || r.source === 'Write')) {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">{r.source} tool results</strong> = confirmation messages Claude received after editing or writing a file.</p>
+        <p>Usually small per call — the file contents went out in the <em>call args</em>, not the result. The opposite shape from Read.</p>
+      </>
+    );
+  }
+  if (r.kind === 'tool_result' && r.source && r.source.startsWith('mcp__')) {
+    const parts = r.source.slice(5).split('__');
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">MCP tool result</strong> from server <span className="font-mono">{parts[0]}</span>, tool <span className="font-mono">{parts.slice(1).join('__')}</span>.</p>
+        <p>The response payload Claude received and added to its input context.</p>
+      </>
+    );
+  }
+  if (r.kind === 'tool_result') {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">{r.source ?? 'Unknown'} tool result</strong> — content the tool returned to Claude.</p>
+        <p>Each byte here entered Claude&apos;s input context and was re-billed on every subsequent turn (at a mix of fresh-input and cache rates).</p>
+      </>
+    );
+  }
+  if (r.kind === 'tool_use') {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">{r.source ?? 'Unknown'} call args</strong> — the JSON arguments Claude sent when calling this tool.</p>
+        <p>Billed as <strong>output tokens</strong> (the highest per-token rate). Edit and Write calls are usually the priciest here because the new file contents go in the args.</p>
+      </>
+    );
+  }
+  if (r.kind === 'user_text') {
+    return (
+      <>
+        <p className="mb-2"><strong className="text-ink">Your prompts</strong> — the messages you typed into Claude Code.</p>
+        <p>Fed into Claude&apos;s input context and re-billed every subsequent turn (mostly at the cheap cache-read rate after the first turn).</p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="mb-2"><strong className="text-ink">Claude&apos;s text replies</strong> — everything Claude wrote back as plain text (not tool calls).</p>
+      <p>Billed as <strong>output tokens</strong>. Lower volume than tool args but high per-token cost.</p>
+    </>
+  );
 }

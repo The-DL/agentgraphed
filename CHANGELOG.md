@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] — 2026-06-10
+
+### Added
+- **Real tooltips, not native `title=""`.** New `Tooltip` component renders a small `(i)` icon that opens a styled popover on hover, focus, or click. Used throughout the &ldquo;Where your cost went&rdquo; card so explanations are discoverable instead of relying on the slow / plain-text native browser tooltip.
+- **One tooltip per billing bucket** explaining what it is, what rate it&apos;s billed at, and what (if anything) the user can do about it. The &ldquo;Replayed context&rdquo; tooltip in particular spells out why it usually dominates (Anthropic re-bills full context each turn, ~10% rate) and that a high share there is the *cheap* regime.
+- **One tooltip per source row** (&ldquo;Read&rdquo;, &ldquo;Bash&rdquo;, &ldquo;Edit&rdquo;, MCP calls, your prompts, Claude&apos;s text replies, etc.) with kind-specific copy. The &ldquo;Read&rdquo; tooltip explicitly disambiguates the **Read tool** (file contents Claude pulled into context) from the **`cache_read` billing kind** — the most common source of confusion in the v0.5.0 / v0.5.1 UI.
+- **Section header tooltips** above &ldquo;What Claude read&rdquo; / &ldquo;What Claude said&rdquo; explaining that the top bar and the source rows are two cross-sections of the same dollars.
+
+### Removed
+- The standalone explainer paragraph under the billing bar (its content now lives inside the &ldquo;Replayed context&rdquo; tooltip where it&apos;s contextual).
+
 ## [0.5.1] — 2026-06-10
 
 ### Changed
