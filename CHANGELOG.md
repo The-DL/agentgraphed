@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.5] — 2026-06-10
+
+### Added
+- **Rename your leaderboard handle (and have it actually rename).** The opt-in panel has had a &ldquo;Change handle&rdquo; affordance since 0.5.4, but the previous implementation only swapped the local handle and resubmitted — leaving every prior session on the server under the old handle. Result: you ended up on the public leaderboard *twice*, once under each name. 0.5.5 calls a new server endpoint (`POST /api/leaderboard/rename`) that UPDATEs every row (sessions, weekly aggregates, profile) from old handle to new handle in a single transaction. You show up exactly once, with all your prior data preserved. Collisions (the new handle is already taken) come back as a clear error.
+
 ## [0.5.4] — 2026-06-10
 
 ### Added
