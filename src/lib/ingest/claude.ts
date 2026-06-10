@@ -194,6 +194,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
   const toolIoBatch: Array<{
     message_id: string;
     idx: number;
+    timestamp: number;
     item: ToolIo;
   }> = [];
   // tool_result items only carry the tool_use_id pointing back at the
@@ -202,7 +203,13 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
   const toolNameByUseId = new Map<string, string>();
   // We also need to know which tool_use items had IDs so we can write the
   // raw id into source during parsing, and rewrite it on flush.
-  const collectToolIo = (messageId: string, role: string | undefined, content: unknown, rawItems: unknown) => {
+  const collectToolIo = (
+    messageId: string,
+    timestamp: number,
+    role: string | undefined,
+    content: unknown,
+    rawItems: unknown,
+  ) => {
     const items = extractToolIo(role, content);
     // The parser doesn't see Claude's per-item `id` field; pluck it here so
     // we can populate toolNameByUseId. tool_use items carry `id` + `name`.
@@ -216,7 +223,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
         }
       }
     }
-    items.forEach((item, i) => toolIoBatch.push({ message_id: messageId, idx: i, item }));
+    items.forEach((item, i) => toolIoBatch.push({ message_id: messageId, idx: i, timestamp, item }));
   };
 
   for await (const raw of rl) {
@@ -283,7 +290,8 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
       // Always collect breakdown so tool_results contribute even when no
       // message row gets persisted for the user line.
       if (isToolResultEcho || text) {
-        collectToolIo(msgId, 'user', line.message.content, line.message.content);
+        const lineTs = Number.isNaN(ts) ? Date.now() : ts;
+        collectToolIo(msgId, lineTs, 'user', line.message.content, line.message.content);
       }
     } else if (line.type === 'assistant' && line.message) {
       if (line.message.model) lastModel = line.message.model;
@@ -325,7 +333,8 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
       // Capture breakdown even when there's no surfaced text — assistant
       // turns that consist of just a tool_use still contribute to the
       // session's output bytes.
-      collectToolIo(msgId, 'assistant', line.message.content, line.message.content);
+      const lineTs = Number.isNaN(ts) ? Date.now() : ts;
+      collectToolIo(msgId, lineTs, 'assistant', line.message.content, line.message.content);
     }
   }
 
@@ -425,9 +434,10 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
   if (toolIoBatch.length > 0) {
     const insertToolIo = db.prepare(
       `INSERT INTO tool_io (
-         message_id, session_id, idx, kind, source, bytes, est_tokens
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         message_id, session_id, idx, timestamp, kind, source, bytes, est_tokens
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(message_id, idx) DO UPDATE SET
+         timestamp = excluded.timestamp,
          kind = excluded.kind,
          source = excluded.source,
          bytes = excluded.bytes,
@@ -440,7 +450,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
           source = toolNameByUseId.get(source)!;
         }
         insertToolIo.run(
-          row.message_id, sessionId, row.idx, row.item.kind, source,
+          row.message_id, sessionId, row.idx, row.timestamp, row.item.kind, source,
           row.item.bytes, row.item.est_tokens,
         );
       }

@@ -149,6 +149,11 @@ function ensureSchema(db: Database.Database) {
       message_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
       idx INTEGER NOT NULL,        -- order within the message's content array
+      timestamp INTEGER NOT NULL,  -- ms — copied from the source JSONL line so
+                                   -- windowed dashboard queries don't depend
+                                   -- on a messages-table join (lots of tool_use
+                                   -- and tool_result items live on lines that
+                                   -- never produced a messages row).
       kind TEXT NOT NULL,
       source TEXT,                 -- tool name for tool_use / tool_result
       bytes INTEGER NOT NULL,
@@ -158,6 +163,7 @@ function ensureSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS tool_io_session_idx ON tool_io(session_id);
     CREATE INDEX IF NOT EXISTS tool_io_kind_idx ON tool_io(kind);
     CREATE INDEX IF NOT EXISTS tool_io_source_idx ON tool_io(source);
+    -- timestamp_idx is created post-ALTER for v4 → v5 upgrade compatibility.
   `);
 
   // Lightweight migrations for existing DBs from earlier versions.
@@ -189,6 +195,20 @@ function ensureSchema(db: Database.Database) {
   if (!msgColNames.has('cache_write_tokens')) db.exec('ALTER TABLE messages ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0');
   if (!msgColNames.has('est_cost_usd')) db.exec('ALTER TABLE messages ADD COLUMN est_cost_usd REAL NOT NULL DEFAULT 0');
 
+  // tool_io.timestamp added in v5. The schema-version-driven re-ingest below
+  // wipes tool_io entirely on the v4 → v5 transition, but the table still
+  // needs the column to exist before any query touches it. ALTER on an
+  // existing v4 table; brand-new DBs already get it from the CREATE TABLE.
+  const toolIoCols = db.prepare('PRAGMA table_info(tool_io)').all() as { name: string }[];
+  const toolIoColNames = new Set(toolIoCols.map((c) => c.name));
+  if (toolIoColNames.size > 0 && !toolIoColNames.has('timestamp')) {
+    db.exec('ALTER TABLE tool_io ADD COLUMN timestamp INTEGER NOT NULL DEFAULT 0');
+  }
+  // Index creation is deferred to here (outside the big CREATE block) so the
+  // v4-to-v5 ALTER above can run first; sqlite errors if you try to index a
+  // column that doesn't exist on the table yet, even with IF NOT EXISTS.
+  db.exec('CREATE INDEX IF NOT EXISTS tool_io_timestamp_idx ON tool_io(timestamp)');
+
   // Schema-version-driven re-ingest. When SCHEMA_VERSION bumps, we drop
   // ingest_state so every file gets re-read on the next scan. Cheap: the
   // ingesters already idempotently upsert sessions + messages by id, so a
@@ -196,9 +216,11 @@ function ensureSchema(db: Database.Database) {
   // Bump this when message ingestion semantics change so existing rows get
   // rebuilt on next boot from the source JSONLs. v2 added per-message token
   // columns; v3 fixed the multi-file Claude session collision where subagent
-  // files were wiping the parent transcript's messages; v4 adds the tool_io
-  // breakdown (per-content-item attribution of where tokens came from).
-  const SCHEMA_VERSION = '4';
+  // files were wiping the parent transcript's messages; v4 added the tool_io
+  // breakdown; v5 adds tool_io.timestamp so windowed dashboard queries don't
+  // require a messages-table join (many tool_use / tool_result items live on
+  // lines that never produce a text-bearing messages row).
+  const SCHEMA_VERSION = '5';
   const prev = db.prepare('SELECT value FROM settings WHERE key = ?').get('schema_version') as
     | { value: string }
     | undefined;

@@ -10,6 +10,7 @@ import { ShareButton } from '@/components/ShareButton';
 import { ProjectFilter } from '@/components/ProjectFilter';
 import { ModelFilter } from '@/components/ModelFilter';
 import { ModelBreakdownCard } from '@/components/ModelBreakdownCard';
+import { TokenBreakdownCard } from '@/components/TokenBreakdownCard';
 import { ClassifyChip } from '@/components/ClassifyChip';
 import {
   getOverview,
@@ -25,6 +26,7 @@ import {
   getUnclassifiedCount,
   getModelBreakdown,
   getModelFamilies,
+  getTokenBreakdown,
 } from '@/lib/queries';
 import { triggerBackgroundIngest, lastIngestedAt } from '@/lib/ingest/auto';
 import { estimateClassifyCost } from '@/lib/llm/classify';
@@ -86,6 +88,7 @@ export default async function DashboardPage({
   const todaySessions = getTodaySessions(projectId, modelFamily);
   const recent = getRecentSessions(8, projectId, modelFamily);
   const daySummary = getDaySummary(dayKey(Date.now()));
+  const tokenBreakdown = getTokenBreakdown(days, projectId, modelFamily);
   // Model breakdown is intentionally not filtered by model — it'd always show
   // one bar. We still respect the day window + project filter so the card
   // reflects "what I'm looking at."
@@ -176,6 +179,12 @@ export default async function DashboardPage({
         </div>
 
         <UsageChartCard data={daily} label={fullLabel} metric={metric} scale={scale} chart={chart} />
+
+        <TokenBreakdownCard
+          rows={tokenBreakdown}
+          title={`Where your tokens went · ${fullLabel}`}
+          scopeLabel="window"
+        />
 
         <div className="grid grid-cols-3 gap-4">
           <div className="card col-span-2">

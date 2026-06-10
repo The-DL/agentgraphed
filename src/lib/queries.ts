@@ -270,6 +270,68 @@ export function getSessionTokenBreakdown(sessionId: string): SessionTokenBreakdo
     .all(sessionId) as SessionTokenBreakdownRow[];
 }
 
+// Aggregated content-source breakdown across the dashboard's current window.
+// Same row shape as the per-session version so the UI can share components.
+// Filter parameters mirror the rest of the dashboard queries (range + project
+// + model family). Memoized like the others — five-second TTL is plenty.
+//
+// Joins tool_io → messages so we can window by message timestamp, then →
+// sessions for the project / model filters. Sessions whose source JSONLs
+// were rotated off disk before v4 contribute zero tool_io rows; they're
+// silently dropped from this view, which is honest — we don't have the
+// breakdown data for them. The card's caller knows to render a "limited
+// coverage" hint when the SUM(est_tokens) here is materially less than
+// session-level totals for the same window.
+export function getTokenBreakdown(
+  days: number | null = 30,
+  projectId?: string | null,
+  modelFamily?: string | null,
+): SessionTokenBreakdownRow[] {
+  return ttlMemo(
+    `getTokenBreakdown:${days ?? 'all'}:${projectId ?? ''}:${modelFamily ?? ''}`,
+    READ_TTL_MS,
+    () => _getTokenBreakdown(days, projectId ?? null, modelFamily ?? null),
+  );
+}
+
+function _getTokenBreakdown(
+  days: number | null,
+  projectId: string | null,
+  modelFamily: string | null,
+): SessionTokenBreakdownRow[] {
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (days !== null) {
+    conds.push('t.timestamp >= ?');
+    params.push(Date.now() - days * 86_400_000);
+  }
+  if (projectId) {
+    conds.push('s.project_id = ?');
+    params.push(projectId);
+  }
+  const mc = modelClause(modelFamily ?? null, 's');
+  const baseWhere = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
+  const where = mc.sql
+    ? (baseWhere ? `${baseWhere}${mc.sql}` : `WHERE 1=1${mc.sql}`)
+    : baseWhere;
+  // tool_io carries its own timestamp + session_id, so the join to sessions
+  // is only needed when there's a project / model filter. We keep the join
+  // unconditionally for simplicity — the sessions index makes it cheap.
+  return getSqlite()
+    .prepare(
+      `SELECT t.kind, t.source,
+              SUM(t.bytes) AS bytes,
+              SUM(t.est_tokens) AS est_tokens,
+              COUNT(*) AS items
+       FROM tool_io t
+         JOIN sessions s ON s.id = t.session_id
+       ${where}
+       GROUP BY t.kind, t.source
+       ORDER BY est_tokens DESC`,
+    )
+    .all(...params, ...mc.params) as SessionTokenBreakdownRow[];
+}
+
 // Per-session assistant-message counts by model family. Useful when Claude
 // Code or Codex bounces between models mid-session (e.g. sub-agents) — surfaces
 // otherwise-invisible model mix. Returns [] if every message used the same

@@ -19,6 +19,10 @@ import type { SessionTokenBreakdownRow } from '@/lib/queries';
 
 type Props = {
   rows: SessionTokenBreakdownRow[];
+  // Header text — defaults match the session-detail framing. Pass a range
+  // label like "last 7 days" to use the dashboard framing.
+  title?: string;
+  scopeLabel?: string;
 };
 
 function displaySource(source: string | null): string {
@@ -32,8 +36,10 @@ function displaySource(source: string | null): string {
   return source;
 }
 
-export function TokenBreakdownCard({ rows }: Props) {
+export function TokenBreakdownCard({ rows, title, scopeLabel }: Props) {
   if (rows.length === 0) return null;
+  const headerTitle = title ?? 'Where the tokens came from';
+  const scopeWord = scopeLabel ?? 'session';
 
   const toolResults = rows.filter((r) => r.kind === 'tool_result');
   const toolCalls = rows.filter((r) => r.kind === 'tool_use');
@@ -49,7 +55,7 @@ export function TokenBreakdownCard({ rows }: Props) {
   return (
     <div className="card">
       <div className="card-header flex items-center justify-between">
-        <span>Where the tokens came from</span>
+        <span>{headerTitle}</span>
         <span className="normal-case tracking-normal font-normal text-ink-mute text-[11px]">
           ≈ estimated from content size, not Anthropic billing
         </span>
@@ -60,6 +66,7 @@ export function TokenBreakdownCard({ rows }: Props) {
           subtitle="counts toward input tokens"
           totalLabel={`${fmtTokens(inputTokens)} · ${fmtBytes(inputBytes)}`}
           totalPct={(inputTokens / totalTokens) * 100}
+          scopeWord={scopeWord}
           accent="primary"
         >
           {toolResults.length === 0 && !userText && (
@@ -93,6 +100,7 @@ export function TokenBreakdownCard({ rows }: Props) {
           subtitle="counts toward output tokens"
           totalLabel={`${fmtTokens(outputTokens)} · ${fmtBytes(outputBytes)}`}
           totalPct={(outputTokens / totalTokens) * 100}
+          scopeWord={scopeWord}
           accent="secondary"
         >
           {assistantText && assistantText.est_tokens > 0 && (
@@ -130,6 +138,7 @@ function Section({
   subtitle,
   totalLabel,
   totalPct,
+  scopeWord,
   accent,
   children,
 }: {
@@ -137,6 +146,7 @@ function Section({
   subtitle: string;
   totalLabel: string;
   totalPct: number;
+  scopeWord: string;
   accent: 'primary' | 'secondary';
   children: React.ReactNode;
 }) {
@@ -150,7 +160,7 @@ function Section({
         </div>
         <div className="text-code-sm font-mono tabular text-ink-dim">
           <span className={accentColor}>{totalLabel}</span>
-          <span className="text-ink-mute ml-2">{totalPct.toFixed(0)}% of session</span>
+          <span className="text-ink-mute ml-2">{totalPct.toFixed(0)}% of {scopeWord}</span>
         </div>
       </div>
       <div className="space-y-1.5 pl-1">{children}</div>
