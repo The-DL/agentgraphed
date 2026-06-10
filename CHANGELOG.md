@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.4] — 2026-06-09
+
+### Added
+- **24h range preset.** `24h | 7d | 30d | 90d | All`. Rolling last 24 hours from now. Range summary cards, prev-period delta, share-image subtitle, daily series all wire up automatically.
+- **Hourly bucket granularity for sub-2-day windows.** The 24h chart now shows ~25 hourly bars/areas — the shape of your day — instead of a two-bucket day-shaped curve. X-axis reads `14:00`, `15:00`; tooltip says "Hour 14:00 — 32M tokens." Granularity follows window size: <2 days hourly, otherwise daily. No new setting; the right thing is the default.
+- **Area / bar chart toggle** on the dashboard usage chart. New `?chart=` URL param next to `?metric=` and `?scale=` — same pattern, shareable, persists across reloads. Bar mode helps the eye separate adjacent quiet hours from surrounding peaks. Share PNG respects it too.
+
+### Fixed
+- **Daily series was silently dropping the leading edge** of fixed-range windows. A rolling N-day window crosses N midnights = N+1 calendar buckets, but the bucket loop was seeding only N. Messages near the leading edge landed in an unseeded bucket and never made it to the chart. Most visible on 24h (one whole bucket missing) but quietly affected 7d / 30d / 90d too. Now seeds `Math.ceil(window / bucketSize) + 1` buckets in both daily and hourly modes.
+
 ## [0.3.3] — 2026-06-09
 
 ### Changed
