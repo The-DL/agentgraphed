@@ -308,6 +308,16 @@ export type TokenBreakdownSummary = {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  // Same four buckets in DOLLARS. cache_read is cheap per-token but
+  // legitimately dominates on long Claude Code sessions (every turn
+  // re-bills the whole context at cache rate). Showing the bar in
+  // dollar space rather than token space gives users a picture that
+  // matches their actual bill — and avoids the confusing 99% cache_read
+  // bar that scares people.
+  input_cost_usd: number;
+  output_cost_usd: number;
+  cache_read_cost_usd: number;
+  cache_write_cost_usd: number;
 };
 
 // Time-series version of getTokenBreakdown: returns one bucket per time
@@ -672,6 +682,7 @@ function _getTokenBreakdown(
     s_output_tokens: number;
     s_cache_read_tokens: number;
     s_cache_write_tokens: number;
+    s_model: string | null;
   };
   const perSession = new Map<string, SessionRollup>();
   for (const r of rows) {
@@ -686,6 +697,7 @@ function _getTokenBreakdown(
         s_output_tokens: r.s_output_tokens,
         s_cache_read_tokens: r.s_cache_read_tokens,
         s_cache_write_tokens: r.s_cache_write_tokens,
+        s_model: r.s_model,
       };
       perSession.set(r.session_id, agg);
     }
@@ -696,13 +708,47 @@ function _getTokenBreakdown(
     }
     uniqueB += r.bytes;
   }
+  let inputCostD = 0;
+  let outputCostD = 0;
+  let cacheReadCostD = 0;
+  let cacheWriteCostD = 0;
   for (const agg of perSession.values()) {
     const inShare = agg.in_bytes_total > 0 ? agg.s_in_window_bytes / agg.in_bytes_total : 0;
     const outShare = agg.out_bytes_total > 0 ? agg.s_out_window_bytes / agg.out_bytes_total : 0;
-    inputT += agg.s_input_tokens * inShare;
-    cacheRT += agg.s_cache_read_tokens * inShare;
-    cacheWT += agg.s_cache_write_tokens * inShare;
-    outputT += agg.s_output_tokens * outShare;
+    const winInputT = agg.s_input_tokens * inShare;
+    const winCacheRT = agg.s_cache_read_tokens * inShare;
+    const winCacheWT = agg.s_cache_write_tokens * inShare;
+    const winOutputT = agg.s_output_tokens * outShare;
+    inputT += winInputT;
+    cacheRT += winCacheRT;
+    cacheWT += winCacheWT;
+    outputT += winOutputT;
+    // Cost per billing bucket. Run estimateCost with only one bucket
+    // populated so we get the per-bucket price applied with the right
+    // model. We pass the *windowed* tokens so the dollar bar matches the
+    // windowed cost split — not the whole session's.
+    inputCostD += estimateCost({
+      model: agg.s_model,
+      inputTokens: winInputT,
+      outputTokens: 0,
+    });
+    outputCostD += estimateCost({
+      model: agg.s_model,
+      inputTokens: 0,
+      outputTokens: winOutputT,
+    });
+    cacheReadCostD += estimateCost({
+      model: agg.s_model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: winCacheRT,
+    });
+    cacheWriteCostD += estimateCost({
+      model: agg.s_model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheWriteTokens: winCacheWT,
+    });
   }
   const billed = inputT + outputT + cacheRT + cacheWT;
 
@@ -717,6 +763,10 @@ function _getTokenBreakdown(
     output_tokens: Math.round(outputT),
     cache_read_tokens: Math.round(cacheRT),
     cache_write_tokens: Math.round(cacheWT),
+    input_cost_usd: inputCostD,
+    output_cost_usd: outputCostD,
+    cache_read_cost_usd: cacheReadCostD,
+    cache_write_cost_usd: cacheWriteCostD,
   };
 }
 

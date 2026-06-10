@@ -55,11 +55,17 @@ export async function GET(req: Request) {
 
   const summary = getTokenBreakdown(days);
 
-  const billed = Math.max(1, summary.billed_tokens);
-  const inPct = (summary.input_tokens / billed) * 100;
-  const cwPct = (summary.cache_write_tokens / billed) * 100;
-  const crPct = (summary.cache_read_tokens / billed) * 100;
-  const outPct = (summary.output_tokens / billed) * 100;
+  // Dollar shares — see TokenBreakdownDetailCard for the rationale. Token
+  // shares make cache_read look like 99% of everything; dollar shares give
+  // a much more honest visual.
+  const billedCost = Math.max(
+    0.0001,
+    summary.input_cost_usd + summary.cache_write_cost_usd + summary.cache_read_cost_usd + summary.output_cost_usd,
+  );
+  const inPct = (summary.input_cost_usd / billedCost) * 100;
+  const cwPct = (summary.cache_write_cost_usd / billedCost) * 100;
+  const crPct = (summary.cache_read_cost_usd / billedCost) * 100;
+  const outPct = (summary.output_cost_usd / billedCost) * 100;
 
   const inputRows = summary.rows.filter((r) => r.kind === 'tool_result' || r.kind === 'user_text');
   const outputRows = summary.rows.filter((r) => r.kind === 'tool_use' || r.kind === 'assistant_text');
@@ -108,7 +114,7 @@ export async function GET(req: Request) {
           <div style={{
             display: 'flex', color: INK_MUTE, fontSize: 11, letterSpacing: 1.2,
             textTransform: 'uppercase', marginBottom: 6,
-          }}>Billing mix</div>
+          }}>What your dollars paid for</div>
           <div style={{ display: 'flex', height: 12, borderRadius: 4, overflow: 'hidden' }}>
             {inPct >= 0.5 && <div style={{ width: `${inPct}%`, backgroundColor: COL_FRESH, display: 'flex' }} />}
             {cwPct >= 0.5 && <div style={{ width: `${cwPct}%`, backgroundColor: COL_CACHE_W, display: 'flex' }} />}
@@ -120,8 +126,8 @@ export async function GET(req: Request) {
             fontSize: 12, fontFamily: 'monospace',
           }}>
             {inPct >= 0.5 && <MixLabel color={COL_FRESH} label="fresh input" pct={inPct} />}
-            {cwPct >= 0.5 && <MixLabel color={COL_CACHE_W} label="cache creation" pct={cwPct} />}
-            {crPct >= 0.5 && <MixLabel color={COL_CACHE_R} label="cache read" pct={crPct} />}
+            {cwPct >= 0.5 && <MixLabel color={COL_CACHE_W} label="cache writes" pct={cwPct} />}
+            {crPct >= 0.5 && <MixLabel color={COL_CACHE_R} label="replayed context" pct={crPct} />}
             {outPct >= 0.5 && <MixLabel color={COL_OUTPUT} label="output" pct={outPct} />}
           </div>
         </div>

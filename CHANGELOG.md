@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] — 2026-06-10
+
+### Changed
+- **&ldquo;Where your cost went&rdquo; bar now shows dollar shares, not token shares.** On long Claude Code sessions, `cache_read` legitimately fills 99% of the billed-token bar because every turn re-bills the entire conversation context at the discounted cache rate. Showing the same data in dollars compresses cache_read to a more honest share (it&apos;s still big, but stops looking like a bug) and makes the &ldquo;Output&rdquo; and &ldquo;Fresh input&rdquo; levers visible. The dollars-by-billing-bucket are computed by running `estimateCost` per session with one bucket populated at a time, summed across the window. Sum of bucket dollars equals the headline cost exactly.
+- **Billing labels rewritten.** `cache read (cheap)` → `Replayed context`. `cache creation` → `Cache writes`. `output` → `Output`. The intent: stop overloading the word &ldquo;read&rdquo; (Anthropic&apos;s `cache_read` token kind vs Claude Code&apos;s Read tool), which was the most common source of confusion.
+- **One-paragraph explainer** under the bar clarifies that a high replayed-context share is the *cheap* regime — without prompt caching the same usage would cost ~10× more.
+- **Per-source rows get hover tooltips** explaining that &ldquo;Read&rdquo; means the Read tool (file contents Claude pulled into context), not the `cache_read` billing kind.
+- **Footer expanded** to explicitly note that the top bar and bottom rows are two cross-sections of the same dollars.
+- **Share-image PNG** matches: dollar shares, new labels.
+
 ## [0.5.0] — 2026-06-10
 
 ### Changed

@@ -53,11 +53,19 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
   const inCost = inputRows.reduce((s, r) => s + r.est_cost_usd, 0);
   const outCost = outputRows.reduce((s, r) => s + r.est_cost_usd, 0);
 
-  const billed = Math.max(1, summary.billed_tokens);
-  const inPct = (summary.input_tokens / billed) * 100;
-  const cwPct = (summary.cache_write_tokens / billed) * 100;
-  const crPct = (summary.cache_read_tokens / billed) * 100;
-  const outPct = (summary.output_tokens / billed) * 100;
+  // We show billing-mix shares by DOLLAR, not by token count. Anthropic's
+  // cache_read rate is ~10% of fresh input, so a 99% cache_read share in
+  // tokens shrinks to ~94% in dollars — a more honest visual because it
+  // matches what you actually paid. Token shares are surfaced as numeric
+  // hover text only.
+  const billedCost = Math.max(
+    0.0001,
+    summary.input_cost_usd + summary.cache_write_cost_usd + summary.cache_read_cost_usd + summary.output_cost_usd,
+  );
+  const inDollarPct = (summary.input_cost_usd / billedCost) * 100;
+  const cwDollarPct = (summary.cache_write_cost_usd / billedCost) * 100;
+  const crDollarPct = (summary.cache_read_cost_usd / billedCost) * 100;
+  const outDollarPct = (summary.output_cost_usd / billedCost) * 100;
 
   const cacheMultiplier =
     summary.unique_bytes > 0
@@ -102,58 +110,118 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
           </div>
         </div>
 
-        {/* Billing mix */}
+        {/* Billing mix — dollar shares, not token shares */}
         <div>
-          <div className="text-[11px] text-ink-mute uppercase tracking-wider mb-2">Billing mix</div>
-          <div className="flex h-3 rounded overflow-hidden mb-2">
-            <Bar pct={inPct} color="#ff5e94" />
-            <Bar pct={cwPct} color="#ffaa3a" />
-            <Bar pct={crPct} color="#5cd0ff" />
-            <Bar pct={outPct} color="#00ffab" />
+          <div className="flex items-baseline justify-between mb-2">
+            <span className="text-[11px] text-ink-mute uppercase tracking-wider">
+              What your dollars paid for
+            </span>
+            <span className="text-[11px] text-ink-mute font-mono">by est. cost · not by token count</span>
+          </div>
+          <div className="flex h-3 rounded overflow-hidden mb-2" title="Bar widths are dollar shares, not token counts.">
+            <Bar pct={inDollarPct} color="#ff5e94" title={`Fresh input — $${summary.input_cost_usd.toFixed(2)} (${inDollarPct.toFixed(1)}%)`} />
+            <Bar pct={cwDollarPct} color="#ffaa3a" title={`Cache writes — $${summary.cache_write_cost_usd.toFixed(2)} (${cwDollarPct.toFixed(1)}%)`} />
+            <Bar pct={crDollarPct} color="#5cd0ff" title={`Replayed context — $${summary.cache_read_cost_usd.toFixed(2)} (${crDollarPct.toFixed(1)}%)`} />
+            <Bar pct={outDollarPct} color="#00ffab" title={`Output (Claude's replies + tool calls) — $${summary.output_cost_usd.toFixed(2)} (${outDollarPct.toFixed(1)}%)`} />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] font-mono">
-            <BillStat color="#ff5e94" label="fresh input" tokens={summary.input_tokens} pct={inPct} />
-            <BillStat color="#ffaa3a" label="cache creation" tokens={summary.cache_write_tokens} pct={cwPct} />
-            <BillStat color="#5cd0ff" label="cache read (cheap)" tokens={summary.cache_read_tokens} pct={crPct} />
-            <BillStat color="#00ffab" label="output" tokens={summary.output_tokens} pct={outPct} />
+            <DollarStat
+              color="#ff5e94"
+              label="Fresh input"
+              dollars={summary.input_cost_usd}
+              dollarPct={inDollarPct}
+              tokens={summary.input_tokens}
+              tooltip="Your new prompts + uncached context, charged at the full input rate."
+            />
+            <DollarStat
+              color="#ffaa3a"
+              label="Cache writes"
+              dollars={summary.cache_write_cost_usd}
+              dollarPct={cwDollarPct}
+              tokens={summary.cache_write_tokens}
+              tooltip="Content being written into Anthropic's prompt cache (~1.25× input rate). Pays back when subsequent turns re-read the same content."
+            />
+            <DollarStat
+              color="#5cd0ff"
+              label="Replayed context"
+              dollars={summary.cache_read_cost_usd}
+              dollarPct={crDollarPct}
+              tokens={summary.cache_read_tokens}
+              tooltip="Conversation context already in cache, re-billed every turn at the ~10% rate. This is usually big on long Claude Code sessions — it's the cheap regime, not a problem."
+            />
+            <DollarStat
+              color="#00ffab"
+              label="Output"
+              dollars={summary.output_cost_usd}
+              dollarPct={outDollarPct}
+              tokens={summary.output_tokens}
+              tooltip="Claude's text replies + tool calls, charged at the full output rate (highest per-token)."
+            />
           </div>
+          <p className="mt-3 text-[11px] text-ink-mute leading-relaxed">
+            <strong className="text-ink-dim">Why &ldquo;Replayed context&rdquo; usually dominates:</strong>{' '}
+            Anthropic re-bills the entire conversation context every turn. Cache reads cost
+            ~10% of fresh input, but they stack up across long sessions. A 90%+ replay share
+            here is the <em>cheap</em> regime — you&apos;d be paying ~10× more without prompt
+            caching. The lever you can move is the <span className="text-ink-dim">Fresh input</span> share,
+            which grows when context can&apos;t be cached (new system prompts, model swaps,
+            very fresh tool results).
+          </p>
         </div>
 
         {/* Sources */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <SourceList
-            title="What Claude read"
-            subtitle={`${fmtCost(inCost)} · input-side`}
-            rows={inputRows}
-            expanded={inputExpanded}
-            onToggle={() => setExpandedSide(inputExpanded ? 'none' : (outputExpanded ? 'output' : 'input'))}
-            accent="primary"
-          />
-          <SourceList
-            title="What Claude said"
-            subtitle={`${fmtCost(outCost)} · output-side`}
-            rows={outputRows}
-            expanded={outputExpanded}
-            onToggle={() => setExpandedSide(outputExpanded ? (inputExpanded ? 'input' : 'none') : (inputExpanded ? 'both' : 'output'))}
-            accent="secondary"
-          />
+        <div>
+          <div className="text-[11px] text-ink-mute uppercase tracking-wider mb-3">
+            What put content into Claude&apos;s context
+            <span className="ml-2 normal-case tracking-normal font-normal text-ink-mute">
+              (pro-rated cost by source — input-side bytes are re-billed every turn until they age out of cache)
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <SourceList
+              title="What Claude read"
+              subtitle={`${fmtCost(inCost)} · input-side`}
+              hint="Tool results + your prompts. Bytes here become part of Claude's input context and re-bill on every subsequent turn."
+              rows={inputRows}
+              expanded={inputExpanded}
+              onToggle={() => setExpandedSide(inputExpanded ? 'none' : (outputExpanded ? 'output' : 'input'))}
+              accent="primary"
+            />
+            <SourceList
+              title="What Claude said"
+              subtitle={`${fmtCost(outCost)} · output-side`}
+              hint="Claude's text replies + the JSON arguments of every tool call it made."
+              rows={outputRows}
+              expanded={outputExpanded}
+              onToggle={() => setExpandedSide(outputExpanded ? (inputExpanded ? 'input' : 'none') : (inputExpanded ? 'both' : 'output'))}
+              accent="secondary"
+            />
+          </div>
         </div>
 
         {/* Honest footer */}
         <div className="text-[11px] text-ink-mute border-t border-surface-2 pt-3 space-y-1 leading-relaxed">
           <p>
-            Per-source <span className="text-ink-dim">$</span> figures are pro-rated:
-            we take the session&apos;s actual <span className="font-mono">est_cost_usd</span> and
-            split it across content items by their share of unique bytes. Input-side cost is
-            split among tool results + your prompts; output-side cost is split among tool calls
-            + Claude&apos;s text.
+            <strong className="text-ink-dim">Two different views, same dollars.</strong>{' '}
+            The top bar shows what billing kind your dollars went to (fresh input vs cache).
+            The bottom rows show what content source those dollars came from (Read tool, Bash,
+            your prompts, etc.). Every dollar appears in <em>both</em> views — they&apos;re
+            different cross-sections of the same cost.
           </p>
           <p>
-            We can&apos;t observe which individual reads landed in fresh input vs cache,
-            so the per-source split assumes each byte of a kind paid the same average rate.
-            That means a Read whose contents got cached is undercredited and a Read that
-            arrived fresh is overcredited. The headline cost is exact; the source split is
-            an honest estimate.
+            <strong className="text-ink-dim">&ldquo;Read&rdquo; means the Read tool</strong> —
+            files Claude pulled into context — not the &ldquo;Replayed context&rdquo; billing
+            kind. They&apos;re unrelated despite sharing a word. The Read tool&apos;s dollar
+            value is a pro-rated estimate of how much of your bill came from file contents
+            staying in Claude&apos;s context window.
+          </p>
+          <p>
+            Per-source <span className="font-mono">$</span> figures are pro-rated: we take
+            each session&apos;s actual <span className="font-mono">est_cost_usd</span> and
+            split it across content items by share of unique bytes. We can&apos;t observe which
+            individual reads landed in fresh input vs cache, so the split assumes each byte of
+            a kind paid the same average rate. Headline cost is exact; source split is an
+            honest estimate.
           </p>
         </div>
       </div>
@@ -161,29 +229,44 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
   );
 }
 
-function Bar({ pct, color }: { pct: number; color: string }) {
+function Bar({ pct, color, title }: { pct: number; color: string; title?: string }) {
   if (pct < 0.5) return null;
-  return <div style={{ width: `${pct}%`, backgroundColor: color }} />;
+  return <div style={{ width: `${pct}%`, backgroundColor: color }} title={title} />;
 }
 
-function BillStat({ color, label, tokens, pct }: { color: string; label: string; tokens: number; pct: number }) {
+function DollarStat({
+  color,
+  label,
+  dollars,
+  dollarPct,
+  tokens,
+  tooltip,
+}: {
+  color: string;
+  label: string;
+  dollars: number;
+  dollarPct: number;
+  tokens: number;
+  tooltip: string;
+}) {
   return (
-    <div className="flex items-center gap-2 text-ink-mute">
-      <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: color }} />
-      <span className="truncate">
-        <span className="text-ink-dim">{label}</span>
-        <span className="ml-1">{pct.toFixed(0)}%</span>
-        <span className="ml-1 text-ink-mute">({fmtTokens(tokens)})</span>
-      </span>
+    <div className="flex items-start gap-2 text-ink-mute" title={tooltip}>
+      <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0 mt-1.5" style={{ backgroundColor: color }} />
+      <div className="leading-tight">
+        <div className="text-ink-dim">{label}</div>
+        <div className="text-ink">{fmtCost(dollars)} <span className="text-ink-mute">({dollarPct.toFixed(0)}%)</span></div>
+        <div className="text-ink-mute text-[10px]">{fmtTokens(tokens)} tokens</div>
+      </div>
     </div>
   );
 }
 
 function SourceList({
-  title, subtitle, rows, expanded, onToggle, accent,
+  title, subtitle, hint, rows, expanded, onToggle, accent,
 }: {
   title: string;
   subtitle: string;
+  hint?: string;
   rows: TokenBreakdownRow[];
   expanded: boolean;
   onToggle: () => void;
@@ -197,9 +280,12 @@ function SourceList({
   return (
     <div>
       <div className="flex items-baseline justify-between mb-2">
-        <span className="text-body-md text-ink">{title}</span>
+        <span className="text-body-md text-ink" title={hint}>{title}</span>
         <span className="text-[11px] text-ink-mute font-mono normal-case tracking-normal">{subtitle}</span>
       </div>
+      {hint && (
+        <div className="text-[11px] text-ink-mute leading-relaxed mb-3 -mt-1">{hint}</div>
+      )}
       <div className="space-y-2">
         {visible.length === 0 && (
           <div className="text-body-sm text-ink-mute">No data in this group.</div>
@@ -221,8 +307,16 @@ function SourceList({
             + (r.kind === 'tool_use' ? ' · call args' : '');
           const detail = `${r.items} ${r.items === 1 ? 'item' : 'items'} · ${fmtBytes(r.bytes)}`;
           const pct = (r.est_cost_usd / maxCost) * 100;
+          const rowTip =
+            r.kind === 'tool_result'
+              ? `Bytes returned by the ${r.source ?? 'unknown'} tool, fed into Claude's input context. Pro-rated cost across input-side billing buckets (fresh + cache_read + cache_write).`
+              : r.kind === 'tool_use'
+              ? `JSON arguments Claude sent when calling the ${r.source ?? 'unknown'} tool. Billed as output tokens (highest per-token rate).`
+              : r.kind === 'user_text'
+              ? 'Your prompts. Fed into Claude’s input context and re-billed every subsequent turn (mostly at cache rate).'
+              : 'Claude’s text replies. Billed as output tokens.';
           return (
-            <div key={`${r.kind}|${r.source ?? ''}`} className="space-y-1">
+            <div key={`${r.kind}|${r.source ?? ''}`} className="space-y-1" title={rowTip}>
               <div className="flex items-baseline justify-between text-body-sm">
                 <span className="text-ink-dim truncate pr-2">
                   {label}
