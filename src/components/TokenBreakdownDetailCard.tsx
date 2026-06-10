@@ -1,8 +1,12 @@
-import { fmtTokens, fmtCost } from '@/lib/format';
-import type { TokenBreakdownSummary } from '@/lib/queries';
+'use client';
 
-// Full "where your tokens went" view for the Analytics page. Same data as
-// the dashboard strip but expanded:
+import { useState } from 'react';
+import { fmtTokens, fmtCost } from '@/lib/format';
+import type { TokenBreakdownSummary, TokenBreakdownRow } from '@/lib/queries';
+import { ShareButton } from './ShareButton';
+
+// Full "where your cost went" view for the Analytics page. Same data as
+// the dashboard chart toggle but expanded:
 //   1. Headline: dollar cost in window + billed-tokens-vs-unique-content
 //      mismatch (cache replay multiplier).
 //   2. Billing mix: fresh input / cache creation / cache read / output
@@ -10,13 +14,21 @@ import type { TokenBreakdownSummary } from '@/lib/queries';
 //   3. Per-source table split into INPUT-side (tool_result + user_text)
 //      and OUTPUT-side (tool_use + assistant_text). Each row shows the
 //      source, the pro-rated dollar attribution, the unique bytes that
-//      flowed, and an item count.
+//      flowed, and an item count. Top 5 by default; expand to see all.
 //   4. Honest footer that explains the pro-rating and the cache caveat.
+//
+// Client component because we own the expand/collapse + the share-image
+// trigger; the data still arrives prefetched from the server page.
 
 type Props = {
   summary: TokenBreakdownSummary;
   rangeLabel: string;
+  // The `days` value that produced this summary. We pass it to the share
+  // image URL so the PNG renders the same window the user is looking at.
+  days: number | null;
 };
+
+const TOP_DEFAULT = 5;
 
 function displaySource(source: string | null, kind: string): string {
   if (kind === 'user_text') return 'Your prompts';
@@ -30,7 +42,9 @@ function displaySource(source: string | null, kind: string): string {
   return source;
 }
 
-export function TokenBreakdownDetailCard({ summary, rangeLabel }: Props) {
+export function TokenBreakdownDetailCard({ summary, rangeLabel, days }: Props) {
+  const [expandedSide, setExpandedSide] = useState<'none' | 'input' | 'output' | 'both'>('none');
+
   if (summary.rows.length === 0) return null;
 
   const inputRows = summary.rows.filter((r) => r.kind === 'tool_result' || r.kind === 'user_text');
@@ -51,13 +65,19 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel }: Props) {
         (summary.unique_bytes / 4)
       : 0;
 
+  const shareUrl = `/api/share/cost-breakdown?days=${days === null ? 'all' : days}`;
+
+  const inputExpanded = expandedSide === 'input' || expandedSide === 'both';
+  const outputExpanded = expandedSide === 'output' || expandedSide === 'both';
+
   return (
     <div className="card">
       <div className="card-header flex items-center justify-between">
         <span>Where your cost went · {rangeLabel}</span>
-        <span className="normal-case tracking-normal font-normal text-ink-mute text-[11px]">
-          pro-rated estimates · see footer
-        </span>
+        <div className="flex items-center gap-2 normal-case tracking-normal">
+          <span className="text-ink-mute text-[11px]">pro-rated estimates · see footer</span>
+          <ShareButton imageUrl={shareUrl} />
+        </div>
       </div>
 
       <div className="p-5 space-y-6">
@@ -103,25 +123,19 @@ export function TokenBreakdownDetailCard({ summary, rangeLabel }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <SourceList
             title="What Claude read"
-            subtitle={`${fmtCost(inCost)} · ${inPct.toFixed(0) + crPct.toFixed(0) + cwPct.toFixed(0)}% of billed in this window`}
-            rows={inputRows.map((r) => ({
-              label: displaySource(r.source, r.kind),
-              detail: `${r.items} ${r.items === 1 ? 'item' : 'items'} · ${fmtBytes(r.bytes)}`,
-              cost: r.est_cost_usd,
-              maxCost: Math.max(...inputRows.map((x) => x.est_cost_usd), 0.0001),
-              accent: 'primary' as const,
-            }))}
+            subtitle={`${fmtCost(inCost)} · input-side`}
+            rows={inputRows}
+            expanded={inputExpanded}
+            onToggle={() => setExpandedSide(inputExpanded ? 'none' : (outputExpanded ? 'output' : 'input'))}
+            accent="primary"
           />
           <SourceList
             title="What Claude said"
             subtitle={`${fmtCost(outCost)} · output-side`}
-            rows={outputRows.map((r) => ({
-              label: displaySource(r.source, r.kind) + (r.kind === 'tool_use' ? ' · call args' : ''),
-              detail: `${r.items} ${r.items === 1 ? 'item' : 'items'} · ${fmtBytes(r.bytes)}`,
-              cost: r.est_cost_usd,
-              maxCost: Math.max(...outputRows.map((x) => x.est_cost_usd), 0.0001),
-              accent: 'secondary' as const,
-            }))}
+            rows={outputRows}
+            expanded={outputExpanded}
+            onToggle={() => setExpandedSide(outputExpanded ? (inputExpanded ? 'input' : 'none') : (inputExpanded ? 'both' : 'output'))}
+            accent="secondary"
           />
         </div>
 
@@ -165,15 +179,21 @@ function BillStat({ color, label, tokens, pct }: { color: string; label: string;
   );
 }
 
-type SourceListRow = {
-  label: string;
-  detail: string;
-  cost: number;
-  maxCost: number;
+function SourceList({
+  title, subtitle, rows, expanded, onToggle, accent,
+}: {
+  title: string;
+  subtitle: string;
+  rows: TokenBreakdownRow[];
+  expanded: boolean;
+  onToggle: () => void;
   accent: 'primary' | 'secondary';
-};
+}) {
+  const visible = expanded ? rows : rows.slice(0, TOP_DEFAULT);
+  const hidden = Math.max(0, rows.length - TOP_DEFAULT);
+  const maxCost = Math.max(...rows.map((r) => r.est_cost_usd), 0.0001);
+  const barClass = accent === 'primary' ? 'bg-primary/70' : 'bg-secondary/70';
 
-function SourceList({ title, subtitle, rows }: { title: string; subtitle: string; rows: SourceListRow[] }) {
   return (
     <div>
       <div className="flex items-baseline justify-between mb-2">
@@ -181,21 +201,35 @@ function SourceList({ title, subtitle, rows }: { title: string; subtitle: string
         <span className="text-[11px] text-ink-mute font-mono normal-case tracking-normal">{subtitle}</span>
       </div>
       <div className="space-y-2">
-        {rows.length === 0 && (
+        {visible.length === 0 && (
           <div className="text-body-sm text-ink-mute">No data in this group.</div>
         )}
-        {rows.map((r) => {
-          const pct = (r.cost / r.maxCost) * 100;
-          const barClass = r.accent === 'primary' ? 'bg-primary/70' : 'bg-secondary/70';
+        {visible.map((r) => {
+          const label =
+            r.kind === 'user_text' ? 'Your prompts'
+            : r.kind === 'assistant_text' ? "Claude's text replies"
+            : (() => {
+                const src = r.source;
+                if (!src) return '(unknown)';
+                if (src.startsWith('mcp__')) {
+                  const parts = src.slice(5).split('__');
+                  if (parts.length >= 2) return `MCP · ${parts[0]} · ${parts.slice(1).join('__')}`;
+                  return `MCP · ${parts.join('__')}`;
+                }
+                return src;
+              })()
+            + (r.kind === 'tool_use' ? ' · call args' : '');
+          const detail = `${r.items} ${r.items === 1 ? 'item' : 'items'} · ${fmtBytes(r.bytes)}`;
+          const pct = (r.est_cost_usd / maxCost) * 100;
           return (
-            <div key={r.label} className="space-y-1">
+            <div key={`${r.kind}|${r.source ?? ''}`} className="space-y-1">
               <div className="flex items-baseline justify-between text-body-sm">
                 <span className="text-ink-dim truncate pr-2">
-                  {r.label}
-                  <span className="text-ink-mute font-mono text-[11px] ml-2">{r.detail}</span>
+                  {label}
+                  <span className="text-ink-mute font-mono text-[11px] ml-2">{detail}</span>
                 </span>
                 <span className="font-mono text-ink tabular text-code-sm whitespace-nowrap">
-                  ≈{fmtCost(r.cost)}
+                  ≈{fmtCost(r.est_cost_usd)}
                 </span>
               </div>
               <div className="h-1 bg-surface-2 rounded-full overflow-hidden">
@@ -204,6 +238,15 @@ function SourceList({ title, subtitle, rows }: { title: string; subtitle: string
             </div>
           );
         })}
+        {hidden > 0 && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="text-[11px] text-ink-mute hover:text-primary font-mono normal-case tracking-normal pt-1"
+          >
+            {expanded ? '▴ show top 5' : `▾ show ${hidden} more`}
+          </button>
+        )}
       </div>
     </div>
   );

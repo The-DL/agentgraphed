@@ -56,7 +56,7 @@ export default async function AnalyticsPage({
           />
         </div>
 
-        <TokenBreakdownDetailCard summary={tokenBreakdown} rangeLabel={fullLabel} />
+        <TokenBreakdownDetailCard summary={tokenBreakdown} rangeLabel={fullLabel} days={days} />
 
         <AnalyticsCharts daily={daily} providers={providers} models={models} label={fullLabel} />
       </div>
