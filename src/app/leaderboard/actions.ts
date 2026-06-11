@@ -1,5 +1,6 @@
 'use server';
 
+import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { setSetting, getSetting, getSessionsForLeaderboard } from '@/lib/queries';
 import { cleanSocialLinks } from '@/lib/social';
@@ -8,6 +9,35 @@ const SUBMIT_ENDPOINT = 'https://agentgraphed.com/api/leaderboard/submit';
 const SUBMIT_TIMEOUT_MS = 8_000;
 const SCHEMA_VERSION = 2;
 const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+// Stable per-install identifier. Generated once on first submit and
+// persisted in the local settings table. Included in every submission
+// so the server can compute identity-coherence heuristics (one handle
+// from many installs = suspicious; many handles from one install =
+// suspicious). It's a 16-byte random hex string with no link back to
+// the user — losing it just costs a new identity, not access.
+const INSTALL_ID_KEY = 'install_id';
+
+function getOrCreateInstallId(): string {
+  let id = getSetting(INSTALL_ID_KEY);
+  if (id && /^[a-f0-9]{32}$/.test(id)) return id;
+  id = randomBytes(16).toString('hex');
+  setSetting(INSTALL_ID_KEY, id);
+  return id;
+}
+
+// Client version, read once at module load. The server can use this
+// to spot submissions from a curl-script that lies about its version,
+// and to drop submissions from a client version known to be broken.
+function readClientVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkg = require('../../../../package.json') as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+const CLIENT_VERSION = readClientVersion();
 
 type Result =
   | { ok: true; submitted: boolean; serverStatus?: number; rowsWritten?: number }
@@ -75,6 +105,7 @@ async function submitNow(handle: string, socialLinks: string[]): Promise<{ ok: b
 
   // Chunk into batches the server can accept. social_links rides with
   // the first chunk only — it's a profile-level field, not per-batch.
+  const installId = getOrCreateInstallId();
   let totalWritten = 0;
   let lastStatus = 0;
   for (let i = 0; i < sessions.length; i += SERVER_BATCH_CAP) {
@@ -82,6 +113,11 @@ async function submitNow(handle: string, socialLinks: string[]): Promise<{ ok: b
     const payload = {
       handle,
       schema_version: SCHEMA_VERSION,
+      // install_id is per-install stable; client_version is read from
+      // package.json. Both go in every chunk — small, idempotent, and
+      // the server uses them to compute identity-coherence heuristics.
+      install_id: installId,
+      client_version: CLIENT_VERSION,
       social_links: i === 0 ? socialLinks : undefined,
       sessions: chunk.map(toSessionRow),
     };

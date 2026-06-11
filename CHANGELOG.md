@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.7] — 2026-06-11
+
+### Added
+- **Anonymous install ID on leaderboard submissions.** Every submission now carries a stable 16-byte random identifier generated once on first submit and persisted in the local SQLite. The server uses it to log identity-coherence anomalies (one handle from many installs, or one install signing under many handles) so future cheating is at least visible to the operator. The ID has no link back to your identity — losing it just costs a new identity, not access. Also includes the client version so the server can spot submissions from clients lying about their version. Nothing about your usage changes.
+
 ## [0.5.6] — 2026-06-11
 
 ### Fixed

@@ -11,6 +11,7 @@
 //
 // COST NOTE: this is all local file IO. No API calls, no tokens, no money.
 
+import { randomBytes } from 'node:crypto';
 import { runIngest } from './run';
 import { getSetting, setSetting, getSessionsForLeaderboard } from '../queries';
 import { clearMemo } from '../cache';
@@ -30,6 +31,27 @@ const LEADERBOARD_SCHEMA_VERSION = 2;
 // Sessions whose data updated within the window get re-sent (cheap; the
 // server UPSERTs on session_uuid).
 const LEADERBOARD_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const LEADERBOARD_INSTALL_ID_KEY = 'install_id';
+
+function leaderboardInstallId(): string {
+  let id = getSetting(LEADERBOARD_INSTALL_ID_KEY);
+  if (id && /^[a-f0-9]{32}$/.test(id)) return id;
+  id = randomBytes(16).toString('hex');
+  setSetting(LEADERBOARD_INSTALL_ID_KEY, id);
+  return id;
+}
+
+function leaderboardClientVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkg = require('../../../package.json') as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+const LEADERBOARD_CLIENT_VERSION = leaderboardClientVersion();
+
 let inFlight: Promise<void> | null = null;
 
 // Boot a single global setInterval that keeps re-triggering the ingest even
@@ -168,12 +190,18 @@ async function maybeSubmitLeaderboard(): Promise<void> {
 
     // Chunk into batches the server can accept. social_links rides
     // with the first chunk only (it's a profile-level field).
+    const installId = leaderboardInstallId();
     let allChunksOk = true;
     for (let i = 0; i < sessions.length; i += LEADERBOARD_SERVER_BATCH_CAP) {
       const chunk = sessions.slice(i, i + LEADERBOARD_SERVER_BATCH_CAP);
       const payload = {
         handle,
         schema_version: LEADERBOARD_SCHEMA_VERSION,
+        // install_id is per-install stable; client_version comes from
+        // our own package.json. Both go in every chunk for server-side
+        // identity-coherence heuristics.
+        install_id: installId,
+        client_version: LEADERBOARD_CLIENT_VERSION,
         social_links: i === 0 ? socialLinks : undefined,
         sessions: chunk.map((s) => ({
           session_uuid: s.session_uuid,
