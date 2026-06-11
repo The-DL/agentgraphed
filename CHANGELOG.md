@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.6] — 2026-06-11
+
+### Fixed
+- **Leaderboard now shows your full history, not just the last 7 days.** Before this release the OSS client only ever shipped a trailing-7-day slice to the public leaderboard, so anyone with more than a week of activity saw their public numbers permanently mismatch the local dashboard. 0.5.6 sends every session the first time you submit (chunked to fit the server&apos;s 500-row batch cap), then resumes the cheap 7-day cadence after the all-time seed lands. Triggered automatically on the next opt-in submit or background cycle; nothing for the user to do.
+
 ## [0.5.5] — 2026-06-10
 
 ### Added

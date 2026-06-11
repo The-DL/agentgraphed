@@ -56,35 +56,71 @@ export async function setLeaderboardOptInAction(opts: {
   }
 }
 
+// Server caps batches at 500 session rows per POST, so when we're
+// seeding the user's full history we chunk client-side.
+const SERVER_BATCH_CAP = 500;
+// First time anyone submits, push everything (all-time). After that we
+// only send the trailing 7 days because the server UPSERTs by
+// session_uuid and old data doesn't change. The "seeded" flag is set
+// only after the seed succeeds.
+const SEEDED_FLAG = 'leaderboard_seeded_alltime';
+
 async function submitNow(handle: string, socialLinks: string[]): Promise<{ ok: boolean; status: number; rowsWritten?: number } | null> {
-  const since = Math.max(0, Date.now() - LOOKBACK_MS);
+  const seeded = getSetting(SEEDED_FLAG) === '1';
+  const since = seeded ? Math.max(0, Date.now() - LOOKBACK_MS) : 0;
   const sessions = getSessionsForLeaderboard(since);
-  // If the user has no recent sessions, we still want to mark them as
-  // submitting — but there's nothing to send yet. Treat as "success, 0 rows".
+  // If the user has no sessions in the window, mark them as submitting
+  // (so opt-in feedback succeeds) but there's nothing to send yet.
   if (sessions.length === 0) return { ok: true, status: 204, rowsWritten: 0 };
 
-  const payload = {
-    handle,
-    schema_version: SCHEMA_VERSION,
-    // Include social_links so the profile row is upserted in the same
-    // request as the session batch. The server treats an explicit empty
-    // array as "clear my links", so we always send it.
-    social_links: socialLinks,
-    sessions: sessions.map((s) => ({
-      session_uuid: s.session_uuid,
-      started_at: new Date(s.started_at).toISOString(),
-      duration_ms: s.duration_ms,
-      provider: s.provider,
-      model: s.model,
-      input_tokens: s.input_tokens,
-      output_tokens: s.output_tokens,
-      cache_read_tokens: s.cache_read_tokens,
-      cache_write_tokens: s.cache_write_tokens,
-      est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
-      message_count: s.message_count,
-    })),
-  };
+  // Chunk into batches the server can accept. social_links rides with
+  // the first chunk only — it's a profile-level field, not per-batch.
+  let totalWritten = 0;
+  let lastStatus = 0;
+  for (let i = 0; i < sessions.length; i += SERVER_BATCH_CAP) {
+    const chunk = sessions.slice(i, i + SERVER_BATCH_CAP);
+    const payload = {
+      handle,
+      schema_version: SCHEMA_VERSION,
+      social_links: i === 0 ? socialLinks : undefined,
+      sessions: chunk.map(toSessionRow),
+    };
+    const resp = await postBatch(payload);
+    if (!resp) return null;
+    lastStatus = resp.status;
+    if (!resp.ok) {
+      // Don't set the seeded flag on partial failure — the user will
+      // retry on the next submit cycle.
+      return resp;
+    }
+    totalWritten += resp.rowsWritten ?? 0;
+  }
+  // Mark the user as seeded only after every chunk lands.
+  if (!seeded) setSetting(SEEDED_FLAG, '1');
+  return { ok: true, status: lastStatus, rowsWritten: totalWritten };
+}
 
+type LeaderboardSessionInput = ReturnType<typeof getSessionsForLeaderboard>[number];
+function toSessionRow(s: LeaderboardSessionInput) {
+  return {
+    session_uuid: s.session_uuid,
+    started_at: new Date(s.started_at).toISOString(),
+    duration_ms: s.duration_ms,
+    provider: s.provider,
+    model: s.model,
+    input_tokens: s.input_tokens,
+    output_tokens: s.output_tokens,
+    cache_read_tokens: s.cache_read_tokens,
+    cache_write_tokens: s.cache_write_tokens,
+    est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
+    message_count: s.message_count,
+  };
+}
+
+// POST one batch. Returns null on network/abort failure so the caller
+// can short-circuit; on HTTP response (success or otherwise) returns
+// {ok, status, rowsWritten}.
+async function postBatch(payload: unknown): Promise<{ ok: boolean; status: number; rowsWritten?: number } | null> {
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), SUBMIT_TIMEOUT_MS);
   try {
@@ -99,7 +135,7 @@ async function submitNow(handle: string, socialLinks: string[]): Promise<{ ok: b
       const body = (await resp.json()) as { rows_written?: number };
       rowsWritten = body?.rows_written;
     } catch {
-      // ignore — server might not have responded with JSON
+      // server didn't return JSON; non-fatal
     }
     return { ok: resp.ok, status: resp.status, rowsWritten };
   } catch {

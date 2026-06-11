@@ -112,6 +112,18 @@ async function maybeAutoClassify(): Promise<void> {
 // the next ingest tick. The server UPSERTs on (handle, session_uuid)
 // so re-sending the same session within the lookback window is cheap
 // and the latest values win.
+// Server caps batches at 500 session rows per POST, so the first all-time
+// seed needs to chunk. After that the trailing 7-day window typically
+// fits in one batch.
+const LEADERBOARD_SERVER_BATCH_CAP = 500;
+// One-time flag: when unset, the next submit ships the full lifetime
+// history (chunked). Then the flag is set and subsequent submits go
+// back to the 7-day lookback. Without this, anyone with more than a
+// week of history shows up on the public board with only a slice of
+// their real numbers — local dashboard vs. leaderboard would
+// permanently disagree.
+const LEADERBOARD_SEEDED_FLAG = 'leaderboard_seeded_alltime';
+
 async function maybeSubmitLeaderboard(): Promise<void> {
   try {
     if (getSetting('leaderboard_opt_in') !== 'on') return;
@@ -121,21 +133,28 @@ async function maybeSubmitLeaderboard(): Promise<void> {
     const lastRaw = getSetting('leaderboard_last_submitted_ms');
     const lastMs = lastRaw ? parseInt(lastRaw, 10) : 0;
 
-    // Build the batch: every session that ended within the lookback window.
-    // The server UPSERTs by session_uuid, so previously-sent sessions just
-    // get their totals refreshed (cheap, idempotent).
-    const since = Math.max(0, Date.now() - LEADERBOARD_LOOKBACK_MS);
+    // First-ever submit (or any later run where the seed flag has been
+    // unset to force a re-seed): pull every session. Otherwise just the
+    // trailing 7-day window — those are the rows whose totals can still
+    // change as a session continues. Older rows are immutable on the
+    // server side.
+    const seeded = getSetting(LEADERBOARD_SEEDED_FLAG) === '1';
+    const since = seeded ? Math.max(0, Date.now() - LEADERBOARD_LOOKBACK_MS) : 0;
     const sessions = getSessionsForLeaderboard(since);
     if (sessions.length === 0) return;
 
     // Cadence gate: skip if cooldown not elapsed AND no session has ended
-    // since the last submit. (i.e., only push early if there's new data.)
-    const cooldownActive = Date.now() - lastMs < LEADERBOARD_SUBMIT_INTERVAL_MS;
-    if (cooldownActive) {
-      const hasNewActivity = sessions.some(
-        (s) => s.started_at + s.duration_ms > lastMs,
-      );
-      if (!hasNewActivity) return;
+    // since the last submit. (Only push early if there's new data.)
+    // The cadence gate is bypassed during the initial seed — we want
+    // history out as soon as the user is eligible.
+    if (seeded) {
+      const cooldownActive = Date.now() - lastMs < LEADERBOARD_SUBMIT_INTERVAL_MS;
+      if (cooldownActive) {
+        const hasNewActivity = sessions.some(
+          (s) => s.started_at + s.duration_ms > lastMs,
+        );
+        if (!hasNewActivity) return;
+      }
     }
 
     // Self-asserted social links — newline-delimited URLs in the local
@@ -147,37 +166,54 @@ async function maybeSubmitLeaderboard(): Promise<void> {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const payload = {
-      handle,
-      schema_version: LEADERBOARD_SCHEMA_VERSION,
-      social_links: socialLinks,
-      sessions: sessions.map((s) => ({
-        session_uuid: s.session_uuid,
-        started_at: new Date(s.started_at).toISOString(),
-        duration_ms: s.duration_ms,
-        provider: s.provider,
-        model: s.model,
-        input_tokens: s.input_tokens,
-        output_tokens: s.output_tokens,
-        cache_read_tokens: s.cache_read_tokens,
-        cache_write_tokens: s.cache_write_tokens,
-        est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
-        message_count: s.message_count,
-      })),
-    };
+    // Chunk into batches the server can accept. social_links rides
+    // with the first chunk only (it's a profile-level field).
+    let allChunksOk = true;
+    for (let i = 0; i < sessions.length; i += LEADERBOARD_SERVER_BATCH_CAP) {
+      const chunk = sessions.slice(i, i + LEADERBOARD_SERVER_BATCH_CAP);
+      const payload = {
+        handle,
+        schema_version: LEADERBOARD_SCHEMA_VERSION,
+        social_links: i === 0 ? socialLinks : undefined,
+        sessions: chunk.map((s) => ({
+          session_uuid: s.session_uuid,
+          started_at: new Date(s.started_at).toISOString(),
+          duration_ms: s.duration_ms,
+          provider: s.provider,
+          model: s.model,
+          input_tokens: s.input_tokens,
+          output_tokens: s.output_tokens,
+          cache_read_tokens: s.cache_read_tokens,
+          cache_write_tokens: s.cache_write_tokens,
+          est_cost_usd: Math.round(s.est_cost_usd * 10000) / 10000,
+          message_count: s.message_count,
+        })),
+      };
 
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), LEADERBOARD_TIMEOUT_MS);
-    try {
-      const resp = await fetch(LEADERBOARD_ENDPOINT, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-      if (resp.ok) setSetting('leaderboard_last_submitted_ms', String(Date.now()));
-    } finally {
-      clearTimeout(timeout);
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), LEADERBOARD_TIMEOUT_MS);
+      try {
+        const resp = await fetch(LEADERBOARD_ENDPOINT, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: ctrl.signal,
+        });
+        if (!resp.ok) {
+          allChunksOk = false;
+          break;
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    if (allChunksOk) {
+      setSetting('leaderboard_last_submitted_ms', String(Date.now()));
+      // Mark seeded ONLY after every chunk succeeded; otherwise the
+      // next run will retry the seed instead of silently moving on
+      // with a partial dataset on the server.
+      if (!seeded) setSetting(LEADERBOARD_SEEDED_FLAG, '1');
     }
   } catch {
     // Best-effort; never block the user.
