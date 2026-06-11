@@ -16,7 +16,8 @@ const { existsSync } = require('node:fs');
 const ROOT = path.resolve(__dirname, '..');
 
 // --- Subcommands (handled inline, no server boot) ---
-const subcommand = process.argv[2];
+const argv = process.argv.slice(2);
+const subcommand = argv[0];
 switch (subcommand) {
   case 'help':
   case '--help':
@@ -30,12 +31,22 @@ switch (subcommand) {
     process.exit(0);
 }
 
+// --join is a flag, not a subcommand — the user runs the SAME boot
+// flow but the browser opens directly on the leaderboard opt-in
+// section instead of the dashboard root. Lets the centerpiece
+// "npx agentgraphed --join" CTA on agentgraphed.com/leaderboard
+// drop people one click from being on the board.
+const wantsJoin = argv.includes('--join');
+
 function printHelp() {
   const version = require('../package.json').version;
   console.log(`AgentGraphed v${version} — local-first analytics for AI coding sessions
 
 Usage:
   agentgraphed              Start the dashboard (default)
+  agentgraphed --join       Start the dashboard, opening the leaderboard
+                            opt-in page so you can put yourself on the
+                            public board at agentgraphed.com/leaderboard
   agentgraphed --help       Show this message
   agentgraphed --version    Print the installed version
 
@@ -148,14 +159,21 @@ async function main() {
     );
   }
 
-  // Open the browser after the page is reachable.
+  // Open the browser after the page is reachable. With --join we
+  // land directly on the local leaderboard opt-in page (which also
+  // has the rename / social-links flow) instead of the dashboard.
+  const startPath = wantsJoin ? '/leaderboard?join=1' : '/';
+  const startUrl = `http://localhost:${port}${startPath}`;
   try {
     const { default: open } = await import('open');
-    await open(`http://localhost:${port}`);
+    await open(startUrl);
   } catch {
-    console.log(`  (open http://localhost:${port} in your browser)`);
+    console.log(`  (open ${startUrl} in your browser)`);
   }
 
+  if (wantsJoin) {
+    console.log('› Opt-in form opened — pick a handle and click Join to add yourself to the public board.');
+  }
   console.log('› Ready. Press Ctrl+C to stop.');
 
   const cleanup = () => {

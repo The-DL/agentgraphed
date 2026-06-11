@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.8] — 2026-06-11
+
+### Added
+- **`npx agentgraphed --join`** — boots the dashboard and lands directly on the leaderboard opt-in page. Pairs with the new copy-the-command CTA on agentgraphed.com/leaderboard, so cold visitors are one paste and one button away from being on the board.
+
 ## [0.5.7] — 2026-06-11
 
 ### Added
