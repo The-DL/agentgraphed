@@ -816,8 +816,18 @@ export type LeaderboardSessionRow = {
   message_count: number;
 };
 
+// The server rejects any session whose duration exceeds 30 days as
+// "implausible" — and rejects the WHOLE batch when it sees one. A session
+// can legitimately carry a multi-week span when it was resumed across many
+// days or a source message has a skewed timestamp; that idle wall-clock gap
+// isn't real work and shouldn't be submitted verbatim. Clamp duration_ms at
+// the query — the single chokepoint both submit paths share — so one stale
+// row can never 422 the entire submission. 24h is well under the server cap
+// and above any plausible single active session.
+const LEADERBOARD_MAX_DURATION_MS = 24 * 60 * 60 * 1000;
+
 export function getSessionsForLeaderboard(sinceMs: number): LeaderboardSessionRow[] {
-  return getSqlite()
+  const rows = getSqlite()
     .prepare(
       `SELECT id AS session_uuid, started_at, duration_ms, provider, model,
               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
@@ -825,6 +835,12 @@ export function getSessionsForLeaderboard(sinceMs: number): LeaderboardSessionRo
        FROM sessions WHERE ended_at >= ? ORDER BY started_at ASC LIMIT 500`,
     )
     .all(sinceMs) as LeaderboardSessionRow[];
+  for (const r of rows) {
+    if (r.duration_ms > LEADERBOARD_MAX_DURATION_MS) {
+      r.duration_ms = LEADERBOARD_MAX_DURATION_MS;
+    }
+  }
+  return rows;
 }
 
 export function getSessionMessages(sessionId: string) {
