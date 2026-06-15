@@ -8,6 +8,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ### Fixed
 - **A hung `git` call during ingest no longer freezes the dashboard.** Ingest resolves each project's git root/remote with synchronous `execSync('git ...')` calls. The server is single-threaded, so if a git invocation blocks — no controlling TTY under a service manager, a credential/keychain helper waiting on a GUI, a slow network mount, a sandboxed/TCC-protected working directory — it freezes the event loop and every request times out. Each git call now has a 5s `timeout`; on expiry it's killed and the repo is treated as unresolved so ingest continues.
+### Added
+- **`agentgraphed --no-open` (and `AGENTGRAPHED_NO_OPEN=1`)** — boots the dashboard without launching a browser. Lets you run AgentGraphed headlessly: as a long-lived background service (launchd / systemd), in a container, or over SSH, where popping a browser is impossible or unwanted. The server still prints its URL. The new [Run as a service](README.md#run-as-a-service) section of the README shows ready-to-use macOS launchd and Linux systemd unit examples.
 
 ## [0.5.8] — 2026-06-11
 
