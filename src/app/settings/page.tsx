@@ -2,6 +2,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PageHeader } from '@/components/PageHeader';
 import { LlmSection } from '@/components/LlmSection';
+import { SourceList } from '@/components/SourceList';
+import { getSources, parseSourceRows } from '@/lib/ingest/sources';
 import { getSetting, setSetting } from '@/lib/queries';
 import { PRICES_LAST_UPDATED } from '@/lib/pricing';
 import { runIngest } from '@/lib/ingest/run';
@@ -14,11 +16,15 @@ export const dynamic = 'force-dynamic';
 
 async function savePaths(formData: FormData) {
   'use server';
-  const claude = ((formData.get('claude_log_dir') as string) || '').trim();
-  const codex = ((formData.get('codex_log_dir') as string) || '').trim();
-  setSetting('claude_log_dir', claude);
-  setSetting('codex_log_dir', codex);
+  // Clean + re-serialize each list so we never persist junk rows. An empty
+  // list is stored as "[]", which makes getSources() fall back to the default
+  // directory tagged "default".
+  const claude = parseSourceRows((formData.get('claude_sources') as string) || '[]');
+  const codex = parseSourceRows((formData.get('codex_sources') as string) || '[]');
+  setSetting('claude_sources', JSON.stringify(claude));
+  setSetting('codex_sources', JSON.stringify(codex));
   revalidatePath('/settings');
+  revalidatePath('/');
 }
 
 async function rescan() {
@@ -40,8 +46,8 @@ export default function SettingsPage() {
 
   const defaultClaude = join(homedir(), '.claude', 'projects');
   const defaultCodex = join(homedir(), '.codex', 'sessions');
-  const claudeLogDir = getSetting('claude_log_dir') || '';
-  const codexLogDir = getSetting('codex_log_dir') || '';
+  const claudeSources = getSources('claude');
+  const codexSources = getSources('codex');
 
   const stats = getSqlite()
     .prepare(
@@ -70,29 +76,26 @@ export default function SettingsPage() {
         <div className="card">
           <div className="card-header">Data sources</div>
           <form action={savePaths} className="p-5 space-y-4 text-body-md text-ink-dim">
-            <div className="space-y-1">
-              <label className="text-label-caps text-ink-mute block">Claude Code log directory</label>
-              <input
-                name="claude_log_dir"
-                defaultValue={claudeLogDir}
-                placeholder={defaultClaude}
-                className="bg-surface-1 border border-surface-3 rounded px-3 h-9 text-body-md font-mono w-full focus:outline-none focus:border-primary"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-label-caps text-ink-mute block">Codex CLI log directory</label>
-              <input
-                name="codex_log_dir"
-                defaultValue={codexLogDir}
-                placeholder={defaultCodex}
-                className="bg-surface-1 border border-surface-3 rounded px-3 h-9 text-body-md font-mono w-full focus:outline-none focus:border-primary"
-              />
-            </div>
+            <SourceList
+              name="claude_sources"
+              label="Claude Code log directories"
+              initial={claudeSources}
+              placeholder={defaultClaude}
+            />
+            <SourceList
+              name="codex_sources"
+              label="Codex CLI log directories"
+              initial={codexSources}
+              placeholder={defaultCodex}
+            />
             <div className="flex items-center gap-2">
               <button className="btn btn-primary" type="submit">Save paths</button>
             </div>
             <p className="text-body-sm text-ink-mute">
-              Leave blank to use defaults shown as placeholders.
+              Add one row per log directory. The tag labels each source in the
+              timeline and sessions views. Remove all rows to fall back to the
+              default directory (shown as placeholder), tagged{' '}
+              <span className="font-mono">default</span>.
             </p>
           </form>
           <div className="px-5 pb-5 border-t border-surface-2 pt-4">
