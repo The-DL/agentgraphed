@@ -25,6 +25,11 @@ export function SourceList({
   // Only rows with a non-empty path are meaningful; the server cleans again.
   const serialized = JSON.stringify(rows.filter((r) => r.path.trim() !== ''));
 
+  // The server dedups by path (first row wins) — warn before save so a second
+  // row with the same path doesn't silently vanish on the round-trip.
+  const paths = rows.map((r) => r.path.trim()).filter((p) => p !== '');
+  const hasDuplicates = new Set(paths).size !== paths.length;
+
   return (
     <div className="space-y-2">
       <label className="text-label-caps text-ink-mute block">{label}</label>
@@ -54,6 +59,11 @@ export function SourceList({
           </button>
         </div>
       ))}
+      {hasDuplicates && (
+        <p className="text-body-sm text-amber-400">
+          Duplicate paths: only the first row for each path is kept on save.
+        </p>
+      )}
       <button type="button" onClick={add} className="btn text-body-sm">
         + Add source
       </button>

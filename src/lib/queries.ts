@@ -880,15 +880,17 @@ export function getAllSessions(opts: {
 // Distinct non-empty source tags across all sessions, alphabetical — feeds the
 // source filter <select> on the timeline and sessions pages.
 export function getSourceTags(): string[] {
-  return (
-    getSqlite()
-      .prepare(
-        `SELECT DISTINCT source_tag FROM sessions
-         WHERE source_tag IS NOT NULL AND source_tag <> ''
-         ORDER BY source_tag`,
-      )
-      .all() as { source_tag: string }[]
-  ).map((r) => r.source_tag);
+  return ttlMemo('getSourceTags', READ_TTL_MS, () =>
+    (
+      getSqlite()
+        .prepare(
+          `SELECT DISTINCT source_tag FROM sessions
+           WHERE source_tag IS NOT NULL AND source_tag <> ''
+           ORDER BY source_tag`,
+        )
+        .all() as { source_tag: string }[]
+    ).map((r) => r.source_tag),
+  );
 }
 
 export type DailyPoint = { day: string; sessions: number; tokens: number; cost: number };

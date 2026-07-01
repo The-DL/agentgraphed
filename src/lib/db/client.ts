@@ -181,6 +181,9 @@ function ensureSchema(db: Database.Database) {
     db.exec("UPDATE sessions SET source_tag = 'default' WHERE source_tag IS NULL");
   }
   db.exec('CREATE INDEX IF NOT EXISTS sessions_category_idx ON sessions(category)');
+  // Deferred to after the ALTER above (same trick as sessions_category_idx):
+  // sqlite can't index a column that doesn't exist yet on pre-v6 DBs.
+  db.exec('CREATE INDEX IF NOT EXISTS sessions_source_tag_idx ON sessions(source_tag)');
 
   // categories: JSON array of labels. Backfill from the single-string `category`
   // column so existing classifications survive the migration.

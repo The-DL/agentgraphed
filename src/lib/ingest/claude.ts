@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { getSqlite } from '../db/client';
 import { resolveProject, upsertProject } from '../projects';
 import { estimateCost } from '../pricing';
-import { getSources } from './sources';
+import { getSources, gatherTaggedFiles } from './sources';
 import { extractToolIo, type ToolIo } from './contentBreakdown';
 
 function walkJsonl(dir: string, out: string[]) {
@@ -134,24 +134,17 @@ export type IngestStats = {
 export async function ingestClaude(opts: { onProgress?: (msg: string) => void } = {}): Promise<IngestStats> {
   const stats: IngestStats = { filesScanned: 0, filesIngested: 0, sessions: 0, messages: 0 };
 
-  // Gather files across every configured source, tagging each file with its
-  // source. Dedup by absolute path so overlapping source dirs ingest once.
-  const files: Array<{ file: string; tag: string }> = [];
-  const seenFiles = new Set<string>();
-  for (const src of getSources('claude')) {
-    if (!existsSync(src.path)) continue;
-    // Layout: <encoded-cwd>/<session-uuid>.jsonl
+  // Layout: <encoded-cwd>/<session-uuid>.jsonl. Cross-source dedup happens in
+  // gatherTaggedFiles (by real path, first source in config order wins).
+  const files = gatherTaggedFiles(getSources('claude'), (srcPath) => {
+    if (!existsSync(srcPath)) return [];
     const srcFiles: string[] = [];
-    for (const dirent of readdirSync(src.path, { withFileTypes: true })) {
+    for (const dirent of readdirSync(srcPath, { withFileTypes: true })) {
       if (!dirent.isDirectory()) continue;
-      walkJsonl(join(src.path, dirent.name), srcFiles);
+      walkJsonl(join(srcPath, dirent.name), srcFiles);
     }
-    for (const f of srcFiles) {
-      if (seenFiles.has(f)) continue;
-      seenFiles.add(f);
-      files.push({ file: f, tag: src.tag });
-    }
-  }
+    return srcFiles;
+  });
   stats.filesScanned = files.length;
 
   const db = getSqlite();

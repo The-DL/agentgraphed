@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { getSqlite } from '../db/client';
 import { resolveProject, upsertProject } from '../projects';
 import { estimateCost } from '../pricing';
-import { getSources } from './sources';
+import { getSources, gatherTaggedFiles } from './sources';
 import type { IngestStats } from './claude';
 
 type CodexLine = {
@@ -56,17 +56,9 @@ function flattenCodexContent(content: unknown): string {
 export async function ingestCodex(opts: { onProgress?: (msg: string) => void } = {}): Promise<IngestStats> {
   const stats: IngestStats = { filesScanned: 0, filesIngested: 0, sessions: 0, messages: 0 };
 
-  // Gather files across every configured source, tagging each file with its
-  // source. Dedup by absolute path so overlapping source dirs ingest once.
-  const files: Array<{ file: string; tag: string }> = [];
-  const seenFiles = new Set<string>();
-  for (const src of getSources('codex')) {
-    for (const f of walkSessions(src.path)) {
-      if (seenFiles.has(f)) continue;
-      seenFiles.add(f);
-      files.push({ file: f, tag: src.tag });
-    }
-  }
+  // Cross-source dedup happens in gatherTaggedFiles (by real path, first
+  // source in config order wins).
+  const files = gatherTaggedFiles(getSources('codex'), walkSessions);
   stats.filesScanned = files.length;
 
   const db = getSqlite();

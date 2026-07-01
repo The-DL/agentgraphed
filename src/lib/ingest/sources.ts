@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { getSetting } from '../queries';
 
 export type Source = { path: string; tag: string };
@@ -36,19 +37,51 @@ export function resolveSources(rawJson: string | null, fallbackPath: string): So
   return [{ path: fallbackPath, tag: 'default' }];
 }
 
-// Effective sources for a provider: the saved JSON list, else the legacy
-// single-dir setting → env var → hardcoded default, tagged "default".
-export function getSources(provider: 'claude' | 'codex'): Source[] {
-  const raw = getSetting(`${provider}_sources`);
-  const fallback =
-    provider === 'claude'
-      ? getSetting('claude_log_dir') ||
+// The directory a provider falls back to when no explicit source list is
+// saved: legacy single-dir setting → env var → hardcoded default. Exported so
+// the settings UI can show the effective fallback as a placeholder without
+// baking it into a saved row.
+export function fallbackPath(provider: 'claude' | 'codex'): string {
+  return provider === 'claude'
+    ? getSetting('claude_log_dir') ||
         process.env.AGENTGRAPHED_CLAUDE_DIR ||
         process.env.AGENTGRAPH_CLAUDE_DIR ||
         join(homedir(), '.claude', 'projects')
-      : getSetting('codex_log_dir') ||
+    : getSetting('codex_log_dir') ||
         process.env.AGENTGRAPHED_CODEX_DIR ||
         process.env.AGENTGRAPH_CODEX_DIR ||
         join(homedir(), '.codex', 'sessions');
-  return resolveSources(raw, fallback);
+}
+
+// Effective sources for a provider: the saved JSON list, else the legacy
+// single-dir setting → env var → hardcoded default, tagged "default".
+export function getSources(provider: 'claude' | 'codex'): Source[] {
+  return resolveSources(getSetting(`${provider}_sources`), fallbackPath(provider));
+}
+
+// Gather files across every configured source, tagging each file with its
+// source. Shared by both ingesters so the dedup semantics can't drift.
+// Dedup is by canonical (real) path so two sources aliasing the same physical
+// directory — a symlink, a trailing-slash variant — can't ingest the same
+// session twice under two tags; the first source in config order wins.
+export function gatherTaggedFiles(
+  sources: Source[],
+  listFiles: (path: string) => string[],
+): Array<{ file: string; tag: string }> {
+  const out: Array<{ file: string; tag: string }> = [];
+  const seen = new Set<string>();
+  for (const src of sources) {
+    for (const f of listFiles(src.path)) {
+      let key: string;
+      try {
+        key = realpathSync(f);
+      } catch {
+        key = f;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ file: f, tag: src.tag });
+    }
+  }
+  return out;
 }

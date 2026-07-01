@@ -1,9 +1,7 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { PageHeader } from '@/components/PageHeader';
 import { LlmSection } from '@/components/LlmSection';
 import { SourceList } from '@/components/SourceList';
-import { getSources, parseSourceRows } from '@/lib/ingest/sources';
+import { fallbackPath, parseSourceRows } from '@/lib/ingest/sources';
 import { getSetting, setSetting } from '@/lib/queries';
 import { PRICES_LAST_UPDATED } from '@/lib/pricing';
 import { runIngest } from '@/lib/ingest/run';
@@ -17,16 +15,38 @@ export const dynamic = 'force-dynamic';
 async function savePaths(formData: FormData) {
   'use server';
   // Clean + re-serialize each list so we never persist junk rows. An empty
-  // list is stored as "[]", which makes getSources() fall back to the default
-  // directory tagged "default".
+  // list is stored as "[]", which makes getSources() fall back to the
+  // env var / hardcoded default, tagged "default".
   const claude = parseSourceRows((formData.get('claude_sources') as string) || '[]');
   const codex = parseSourceRows((formData.get('codex_sources') as string) || '[]');
+
+  // Detect whether the effective config actually changed before writing, so a
+  // no-op resubmit doesn't wipe the ingest cache below.
+  const prevClaude = JSON.stringify(parseSourceRows(getSetting('claude_sources')));
+  const prevCodex = JSON.stringify(parseSourceRows(getSetting('codex_sources')));
+  const legacyClaude = getSetting('claude_log_dir') || '';
+  const legacyCodex = getSetting('codex_log_dir') || '';
+  const changed =
+    prevClaude !== JSON.stringify(claude) ||
+    prevCodex !== JSON.stringify(codex) ||
+    legacyClaude !== '' ||
+    legacyCodex !== '';
+
   setSetting('claude_sources', JSON.stringify(claude));
   setSetting('codex_sources', JSON.stringify(codex));
-  // Clearing the ingest cache forces the next scan to re-read every file and
-  // re-stamp source_tag, so renaming a tag or moving a path re-tags existing
-  // sessions (otherwise the mtime/size cache would skip unchanged files).
-  getSqlite().prepare('DELETE FROM ingest_state').run();
+  // An explicit save makes the source lists the single point of truth: clear
+  // the legacy single-dir settings so "remove all rows" really falls back to
+  // the env var / hardcoded default the help text promises, instead of a
+  // stale claude_log_dir silently winning the fallback chain.
+  setSetting('claude_log_dir', '');
+  setSetting('codex_log_dir', '');
+
+  if (changed) {
+    // Clearing the ingest cache forces the next scan to re-read every file and
+    // re-stamp source_tag, so renaming a tag or moving a path re-tags existing
+    // sessions (otherwise the mtime/size cache would skip unchanged files).
+    getSqlite().prepare('DELETE FROM ingest_state').run();
+  }
   revalidatePath('/settings');
   revalidatePath('/');
 }
@@ -48,10 +68,15 @@ export default function SettingsPage() {
   // opts out — any other state (unset, 'on', anything else) means auto.
   const autoClassify = getSetting('auto_classify') !== 'off';
 
-  const defaultClaude = join(homedir(), '.claude', 'projects');
-  const defaultCodex = join(homedir(), '.codex', 'sessions');
-  const claudeSources = getSources('claude');
-  const codexSources = getSources('codex');
+  // Seed the form from the RAW saved config, not the resolved sources — the
+  // resolved list bakes the env-var/legacy fallback into an explicit row, so
+  // one Save would freeze e.g. AGENTGRAPHED_CLAUDE_DIR's current value into
+  // settings and silently ignore later env changes. The effective fallback is
+  // shown as the placeholder instead.
+  const claudeSources = parseSourceRows(getSetting('claude_sources'));
+  const codexSources = parseSourceRows(getSetting('codex_sources'));
+  const claudePlaceholder = fallbackPath('claude');
+  const codexPlaceholder = fallbackPath('codex');
 
   const stats = getSqlite()
     .prepare(
@@ -84,13 +109,13 @@ export default function SettingsPage() {
               name="claude_sources"
               label="Claude Code log directories"
               initial={claudeSources}
-              placeholder={defaultClaude}
+              placeholder={claudePlaceholder}
             />
             <SourceList
               name="codex_sources"
               label="Codex CLI log directories"
               initial={codexSources}
-              placeholder={defaultCodex}
+              placeholder={codexPlaceholder}
             />
             <div className="flex items-center gap-2">
               <button className="btn btn-primary" type="submit">Save paths</button>
