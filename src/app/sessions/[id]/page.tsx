@@ -153,6 +153,7 @@ export default async function SessionDetail({ params }: { params: Promise<{ id: 
           <div className="p-4 grid grid-cols-2 gap-3 font-mono text-code-sm">
             <Row k="Session ID" v={session.id} />
             <Row k="Provider" v={session.provider} />
+            <Row k="Source" v={session.source_tag || 'default'} />
             <Row k="cwd" v={displayPath(session.cwd)} />
             <Row k="git branch" v={session.git_branch || '—'} />
           </div>

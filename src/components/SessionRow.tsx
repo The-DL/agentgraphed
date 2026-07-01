@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { fmtTokens, fmtCost, fmtDuration } from '@/lib/format';
 import { displayTitle } from '@/lib/sessionDisplay';
 import { CategoryBadge } from './CategoryBadge';
+import { SourceBadge } from './SourceBadge';
 import { sessionCategories } from '@/lib/sessionDisplay';
 import type { SessionRow as SessionRowData } from '@/lib/queries';
 
@@ -40,15 +41,18 @@ export function SessionRow({ session, zebra }: { session: SessionRowData; zebra?
         })}
       </td>
       <td className="px-3 py-2">
-        <span
-          className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
-            session.provider === 'claude'
-              ? 'bg-primary/15 text-primary'
-              : 'bg-secondary/15 text-secondary'
-          }`}
-        >
-          {session.provider}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span
+            className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
+              session.provider === 'claude'
+                ? 'bg-primary/15 text-primary'
+                : 'bg-secondary/15 text-secondary'
+            }`}
+          >
+            {session.provider}
+          </span>
+          <SourceBadge tag={session.source_tag} />
+        </div>
       </td>
       <td className="px-3 py-2 text-ink-dim">{session.project_name}</td>
       <td className="px-3 py-2 font-mono text-code-sm text-ink-mute truncate max-w-[180px]">
