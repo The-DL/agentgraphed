@@ -7,6 +7,7 @@ import { getSqlite } from '../db/client';
 import { resolveProject, upsertProject } from '../projects';
 import { estimateCost } from '../pricing';
 import { getSetting } from '../queries';
+import { getSources } from './sources';
 import { extractToolIo, type ToolIo } from './contentBreakdown';
 
 function walkJsonl(dir: string, out: string[]) {
@@ -133,19 +134,24 @@ export type IngestStats = {
 };
 
 export async function ingestClaude(opts: { onProgress?: (msg: string) => void } = {}): Promise<IngestStats> {
-  const base =
-    getSetting('claude_log_dir') ||
-    process.env.AGENTGRAPHED_CLAUDE_DIR ||
-    process.env.AGENTGRAPH_CLAUDE_DIR ||
-    join(homedir(), '.claude', 'projects');
   const stats: IngestStats = { filesScanned: 0, filesIngested: 0, sessions: 0, messages: 0 };
 
-  const files: string[] = [];
-  // Layout: <encoded-cwd>/<session-uuid>.jsonl
-  if (existsSync(base)) {
-    for (const dirent of readdirSync(base, { withFileTypes: true })) {
+  // Gather files across every configured source, tagging each file with its
+  // source. Dedup by absolute path so overlapping source dirs ingest once.
+  const files: Array<{ file: string; tag: string }> = [];
+  const seenFiles = new Set<string>();
+  for (const src of getSources('claude')) {
+    if (!existsSync(src.path)) continue;
+    // Layout: <encoded-cwd>/<session-uuid>.jsonl
+    const srcFiles: string[] = [];
+    for (const dirent of readdirSync(src.path, { withFileTypes: true })) {
       if (!dirent.isDirectory()) continue;
-      walkJsonl(join(base, dirent.name), files);
+      walkJsonl(join(src.path, dirent.name), srcFiles);
+    }
+    for (const f of srcFiles) {
+      if (seenFiles.has(f)) continue;
+      seenFiles.add(f);
+      files.push({ file: f, tag: src.tag });
     }
   }
   stats.filesScanned = files.length;
@@ -156,13 +162,13 @@ export async function ingestClaude(opts: { onProgress?: (msg: string) => void } 
     'INSERT OR REPLACE INTO ingest_state (source_path, mtime, size, session_id, ingested_at) VALUES (?, ?, ?, ?, ?)',
   );
 
-  for (const file of files) {
+  for (const { file, tag } of files) {
     const st = statSync(file);
     const cached = getIngestState.get(file) as { mtime: number; size: number } | undefined;
     if (cached && cached.mtime === Math.floor(st.mtimeMs) && cached.size === st.size) continue;
 
     try {
-      const result = await ingestOneFile(file);
+      const result = await ingestOneFile(file, tag);
       if (result) {
         upsertIngestState.run(file, Math.floor(st.mtimeMs), st.size, result.sessionId, Date.now());
         stats.filesIngested += 1;
@@ -178,7 +184,7 @@ export async function ingestClaude(opts: { onProgress?: (msg: string) => void } 
   return stats;
 }
 
-async function ingestOneFile(file: string): Promise<{ sessionId: string; messageCount: number } | null> {
+async function ingestOneFile(file: string, sourceTag: string): Promise<{ sessionId: string; messageCount: number } | null> {
   const db = getSqlite();
   const rl = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity });
 
@@ -383,14 +389,14 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
       message_count, user_message_count, input_tokens, output_tokens,
       cache_read_tokens, cache_write_tokens, est_cost_usd, first_prompt,
       summary, summary_generated, heuristic_title, category, keywords,
-      git_branch, source_path
+      git_branch, source_path, source_tag
     ) VALUES (?, 'claude', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       (SELECT summary FROM sessions WHERE id = ?),
       (SELECT summary_generated FROM sessions WHERE id = ?),
       (SELECT heuristic_title FROM sessions WHERE id = ?),
       (SELECT category FROM sessions WHERE id = ?),
       (SELECT keywords FROM sessions WHERE id = ?),
-      ?, ?)
+      ?, ?, ?)
   `);
   insertSession.run(
     sessionId,
@@ -415,6 +421,7 @@ async function ingestOneFile(file: string): Promise<{ sessionId: string; message
     sessionId,
     gitBranch,
     file,
+    sourceTag,
   );
 
   // IMPORTANT: do not DELETE-then-INSERT messages per session. Claude Code
