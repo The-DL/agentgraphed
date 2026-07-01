@@ -1,12 +1,10 @@
 import { readdirSync, statSync, createReadStream, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { getSqlite } from '../db/client';
 import { resolveProject, upsertProject } from '../projects';
 import { estimateCost } from '../pricing';
-import { getSetting } from '../queries';
 import { getSources } from './sources';
 import { extractToolIo, type ToolIo } from './contentBreakdown';
 
