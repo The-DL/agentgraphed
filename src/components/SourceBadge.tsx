@@ -18,7 +18,7 @@ export function SourceBadge({ tag }: { tag: string | null | undefined }) {
   if (!tag) return null;
   return (
     <span
-      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono lowercase tracking-wider ${tagColor(tag)}`}
+      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono tracking-wider ${tagColor(tag)}`}
       title={`source: ${tag}`}
     >
       {tag}
