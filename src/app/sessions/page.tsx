@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/PageHeader';
 import { SessionRow } from '@/components/SessionRow';
-import { getAllSessions, getProjects } from '@/lib/queries';
+import { getAllSessions, getProjects, getSourceTags } from '@/lib/queries';
 import { triggerBackgroundIngest } from '@/lib/ingest/auto';
 
 export const dynamic = 'force-dynamic';
@@ -8,12 +8,13 @@ export const dynamic = 'force-dynamic';
 export default async function SessionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ provider?: string; project?: string }>;
+  searchParams: Promise<{ provider?: string; project?: string; source?: string }>;
 }) {
   triggerBackgroundIngest();
   const sp = await searchParams;
-  const sessions = getAllSessions({ provider: sp.provider, projectId: sp.project, limit: 500 });
+  const sessions = getAllSessions({ provider: sp.provider, projectId: sp.project, source: sp.source, limit: 500 });
   const projects = getProjects();
+  const sourceTags = getSourceTags();
 
   return (
     <div>
@@ -41,6 +42,20 @@ export default async function SessionsPage({
             </option>
           ))}
         </select>
+        {sourceTags.length > 1 && (
+          <select
+            name="source"
+            defaultValue={sp.source ?? ''}
+            className="bg-surface-1 border border-surface-3 rounded px-2 h-8 text-body-sm"
+          >
+            <option value="">All sources</option>
+            {sourceTags.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
         <button className="btn" type="submit">
           Filter
         </button>

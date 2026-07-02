@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/PageHeader';
 import { SessionItem } from '@/components/SessionItem';
-import { getTimeline, getProjects } from '@/lib/queries';
+import { getTimeline, getProjects, getSourceTags } from '@/lib/queries';
 import { triggerBackgroundIngest } from '@/lib/ingest/auto';
 import { fmtTokens, fmtCost } from '@/lib/format';
 
@@ -9,14 +9,16 @@ export const dynamic = 'force-dynamic';
 export default async function TimelinePage({
   searchParams,
 }: {
-  searchParams: Promise<{ project?: string; provider?: string; q?: string }>;
+  searchParams: Promise<{ project?: string; provider?: string; source?: string; q?: string }>;
 }) {
   triggerBackgroundIngest();
   const sp = await searchParams;
   const projects = getProjects();
+  const sourceTags = getSourceTags();
   const groups = getTimeline({
     projectId: sp.project,
     provider: sp.provider,
+    source: sp.source,
     search: sp.q,
     limit: 200,
   });
@@ -56,6 +58,20 @@ export default async function TimelinePage({
           <option value="claude">Claude</option>
           <option value="codex">Codex</option>
         </select>
+        {sourceTags.length > 1 && (
+          <select
+            name="source"
+            defaultValue={sp.source ?? ''}
+            className="bg-surface-1 border border-surface-3 rounded px-2 h-8 text-body-sm"
+          >
+            <option value="">All sources</option>
+            {sourceTags.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
         <button type="submit" className="btn">
           Filter
         </button>

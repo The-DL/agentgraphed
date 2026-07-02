@@ -172,7 +172,18 @@ function ensureSchema(db: Database.Database) {
   if (!colNames.has('heuristic_title')) db.exec('ALTER TABLE sessions ADD COLUMN heuristic_title TEXT');
   if (!colNames.has('category')) db.exec('ALTER TABLE sessions ADD COLUMN category TEXT');
   if (!colNames.has('keywords')) db.exec('ALTER TABLE sessions ADD COLUMN keywords TEXT');
+  if (!colNames.has('source_tag')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN source_tag TEXT');
+    // Pre-existing rows (and any whose source JSONL has been rotated off disk
+    // and can't be re-ingested) get the "default" tag so the UI badge/filter
+    // has a stable value. Rows that DO get re-ingested below are overwritten
+    // with their real source tag.
+    db.exec("UPDATE sessions SET source_tag = 'default' WHERE source_tag IS NULL");
+  }
   db.exec('CREATE INDEX IF NOT EXISTS sessions_category_idx ON sessions(category)');
+  // Deferred to after the ALTER above (same trick as sessions_category_idx):
+  // sqlite can't index a column that doesn't exist yet on pre-v6 DBs.
+  db.exec('CREATE INDEX IF NOT EXISTS sessions_source_tag_idx ON sessions(source_tag)');
 
   // categories: JSON array of labels. Backfill from the single-string `category`
   // column so existing classifications survive the migration.
@@ -219,8 +230,10 @@ function ensureSchema(db: Database.Database) {
   // files were wiping the parent transcript's messages; v4 added the tool_io
   // breakdown; v5 adds tool_io.timestamp so windowed dashboard queries don't
   // require a messages-table join (many tool_use / tool_result items live on
-  // lines that never produce a text-bearing messages row).
-  const SCHEMA_VERSION = '5';
+  // lines that never produce a text-bearing messages row); v6 adds
+  // sessions.source_tag so sessions can be attributed to a named, tagged log
+  // source.
+  const SCHEMA_VERSION = '6';
   const prev = db.prepare('SELECT value FROM settings WHERE key = ?').get('schema_version') as
     | { value: string }
     | undefined;

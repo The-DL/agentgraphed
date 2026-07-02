@@ -3,6 +3,7 @@ import { sessionCategories } from '@/lib/sessionDisplay';
 import type { SessionRow, SessionDayRole } from '@/lib/queries';
 import { fmtClock, fmtDuration, fmtTokens } from '@/lib/format';
 import { CategoryBadge } from './CategoryBadge';
+import { SourceBadge } from './SourceBadge';
 import { displayTitle } from '@/lib/sessionDisplay';
 
 function providerColor(p: string) {
@@ -54,6 +55,7 @@ export function SessionItem({
             {title}
           </div>
           <RoleBadge role={role} spanDays={spanDays} />
+          <SourceBadge tag={session.source_tag} />
           {labels.map((c) => <CategoryBadge key={c} category={c} />)}
         </div>
         <div className="text-body-sm text-ink-mute mt-0.5 flex items-center gap-2 flex-wrap">
